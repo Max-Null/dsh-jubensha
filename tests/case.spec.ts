@@ -26,6 +26,16 @@ function fixture02(): string {
   return readFileSync(new URL('./fixtures/case-02.yml', import.meta.url), 'utf8')
 }
 
+/**
+ * 第三份：case-01，三本里最早写的那一本，也是**唯一填的时候填不下去的**。
+ *
+ * 它的 YAML 直接住在 `cases/01-拾光照相馆/case.yml`（正式位置，不是 fixture）——
+ * 那三本转完之后，本子的家就是各自的目录。
+ */
+function fixture01(): string {
+  return readFileSync(new URL('../cases/01-拾光照相馆/case.yml', import.meta.url), 'utf8')
+}
+
 /** 一份最小的可用推理本，用来单独试某一条校验。 */
 function minimal(overrides: string = ''): string {
   return `
@@ -126,6 +136,54 @@ describe('加载一份真实的推理本', () => {
     const timeline = loadCase(fixture02()).sections['truth'] as { timeline: { at: string; who: string }[] }
     expect(timeline.timeline).toHaveLength(5)
     expect(timeline.timeline.map(entry => entry.who)).toEqual(['p2', 'p1', 'p0', 'p3', 'p3'])
+  })
+})
+
+describe('加载最早写的那一本（case-01）', () => {
+  it('读得出编号、名字与类型', () => {
+    const loaded = loadCase(fixture01())
+    expect(loaded.id).toBe('01')
+    expect(loaded.title).toBe('拾光照相馆')
+    expect(loaded.genre).toBe('deduction')
+  })
+
+  it('它会报一处「没写现在」——那不是转换的错，是本子本来就有这个缺口', () => {
+    // 另外三张角色卡都自带身份（退休邮递员 / 做老照片生意 / 学徒），
+    // 而林默那张只写了「32 岁，周德明的侄子」——「他现在在做什么活着」这件事角色卡里没有。
+    // 第三局玩家当场问住的正是这件事（「我人物背景呢？我不知道自己现在是在做什么」），
+    // 而它在这本**最早写的**本子里就存在。转换只是把它照出来，没有替它编。
+    const loaded = loadCase(fixture01())
+    const missing = loaded.issues.filter(issue => issue.message.includes('没写「现在」'))
+    expect(missing).toHaveLength(1)
+    expect(missing[0]?.level).toBe('warn')
+    expect(missing[0]?.message).toContain('p0')
+  })
+
+  it('除那一处之外没有别的问题——说明缺口只有一个，不是格式不合', () => {
+    const loaded = loadCase(fixture01())
+    expect(loaded.issues.filter(issue => issue.level === 'error')).toEqual([])
+  })
+
+  it('真凶是 p2，其余三个人都不是', () => {
+    const loaded = loadCase(fixture01())
+    expect(loaded.roles.filter(role => role.culprit).map(role => role.id)).toEqual(['p2'])
+  })
+
+  it('三条线索都在', () => {
+    const { clues } = tableClues(loadCase(fixture01()), [])
+    expect(clues.map(clue => clue.id)).toEqual(['c1', 'c2', 'c3'])
+  })
+
+  it('凶手那份角色本里没有凶手标记——它出现这一局就完了', () => {
+    const culprit = loadCase(fixture01()).roles.find(role => role.culprit)!
+    expect(roleBook(culprit)).not.toContain('凶手')
+    expect(roleBook(culprit)).toContain('马丽')
+  })
+
+  it('四个角色本的切口都对得上座位', () => {
+    const loaded = loadCase(fixture01())
+    expect(loaded.roles.map(role => role.id)).toEqual(['p0', 'p1', 'p2', 'p3'])
+    expect(loaded.roles.filter(role => role.player === 'human').map(role => role.id)).toEqual(['p0'])
   })
 })
 

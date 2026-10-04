@@ -53,6 +53,34 @@ export interface RoomActor {
   readonly avatar?: string
 }
 
+/** 本子里的一个位子。 */
+export interface RoomCaseRole {
+  /** 座位 id。 */
+  readonly id: string
+  /** 这个位子演谁。 */
+  readonly name: string
+  /** 归真人还是 AI。 */
+  readonly player: 'human' | 'ai'
+}
+
+/** 一个能选的本子。 */
+export interface RoomCase {
+  /** 本子编号。 */
+  readonly id: string
+  /** 本子名。 */
+  readonly title: string
+  /** 类型：`deduction` / `drama` / … */
+  readonly genre: string
+  /** 一共有几个座位。 */
+  readonly seats: number
+  /** 真人占几个位子。 */
+  readonly humanSeats: number
+  /** 那份 `case.yml` 的绝对路径——开一局时把它交给 `jubensha_case`。 */
+  readonly path: string
+  /** 每个位子演谁——布置面板按它排座，也按它算要几个 AI 玩家。 */
+  readonly roles: readonly RoomCaseRole[]
+}
+
 /** 面板读的那一份快照。 */
 export interface RoomSnapshot {
   /** 当前这一局；还没开局时为 `null`。 */
@@ -61,4 +89,6 @@ export interface RoomSnapshot {
   readonly players: readonly RoomPlayer[]
   /** 演员池。 */
   readonly actors: readonly RoomActor[]
+  /** 能选的本子。 */
+  readonly cases: readonly RoomCase[]
 }

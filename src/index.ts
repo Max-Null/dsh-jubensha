@@ -21,9 +21,10 @@ import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { openActorPool } from './actor.ts'
 import type { Actor, ActorPool } from './actor.ts'
-import { bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, tableClues } from './case.ts'
+import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
+import { listCases } from './cases.ts'
 import { mountRoomApi } from './room.ts'
 import type { RoomSnapshot } from './room.ts'
 import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
@@ -472,6 +473,9 @@ export function apply(ctx: Context): void {
         finished: isFinished(current),
       },
       players: players.list().map(player => ({ seat: player.seat, name: player.name })),
+      // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，
+      // 收益不抵。四本本子的 YAML 解析是毫秒级的事。
+      cases: [...listCases()],
       actors: actors.map(actor => ({
         id: actor.id,
         name: actor.name,

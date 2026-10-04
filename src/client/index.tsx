@@ -132,6 +132,7 @@ export function RoomPanel({ useStore, actions, t }: PropsRuntime<'shell.overlay'
   const game = snapshot?.game ?? null
   const actors = snapshot?.actors ?? []
   const players = snapshot?.players ?? []
+  const cases = snapshot?.cases ?? []
   return <div style={panelStyle} role="dialog" aria-label={t('room.title')}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
       <strong>{t('room.title')}</strong>
@@ -167,6 +168,19 @@ export function RoomPanel({ useStore, actions, t }: PropsRuntime<'shell.overlay'
           })}
         </div>
       </>}
+
+    <div style={{ marginBottom: '10px' }}>
+      <div style={{ opacity: 0.7, fontSize: '12px', marginBottom: '4px' }}>{t('room.cases')}</div>
+      {cases.length === 0
+        ? <p style={{ margin: '2px 0 0', opacity: 0.8 }}>{t('room.noCases')}</p>
+        : cases.map(entry => <div key={entry.id} style={{ marginBottom: '6px' }}>
+          <div>{entry.title}（case {entry.id}｜{entry.genre}）</div>
+          {/* 位子与角色名是排座的依据：要几个 AI 玩家、谁演谁，看这一行。 */}
+          <div style={{ opacity: 0.65, fontSize: '12px' }}>
+            {entry.roles.map(role => `${role.id} ${role.name}`).join(' · ')}
+          </div>
+        </div>)}
+    </div>
 
     {actors.length > 0
       ? <div>

@@ -37,6 +37,13 @@ const storedActorSchema = z.object({
   style: z.string(),
   /** 跨局攒下来的印象，**新的在前**。 */
   notes: z.array(z.string()),
+  /**
+   * 头像图片的位置。
+   *
+   * **没配就是不配**——缺省时界面按 id 生成一个 SVG（见 `avatar.ts`）。所以这里不需要一个
+   * `kind: 'svg'` 的分支：生成是缺省行为，存下来的只会是"用户真的换了张图"。
+   */
+  avatar: z.string().optional(),
 })
 
 /** 一个演员。 */
@@ -81,6 +88,23 @@ export interface ActorPool {
    * @returns 更新后的演员。
    */
   note(id: string, text: string): Promise<Actor>
+  /**
+   * 改这个演员**怎么玩**。
+   *
+   * 与 `add` 分开是因为改风格是常事（用户看过一局之后想调），而重新招一个人会丢掉印象——
+   * 名字与印象都不动，只换这一件。
+   * @param id - 演员 id。
+   * @param style - 新的玩法描述。
+   * @returns 更新后的演员。
+   */
+  setStyle(id: string, style: string): Promise<Actor>
+  /**
+   * 给他换一张头像图；传空串表示换回按 id 生成的那个。
+   * @param id - 演员 id。
+   * @param image - 图片路径，或者空串。
+   * @returns 更新后的演员。
+   */
+  setAvatar(id: string, image: string): Promise<Actor>
 }
 
 /**
@@ -134,6 +158,24 @@ export async function openActorPool(ctx: Context): Promise<ActorPool> {
       // 追加走域的写队列（`update`），不是自己 `get` 完再 `put`：那样连着记两条会丢一条。
       // 新的在前——brief 里只带最近几条，上一局的事才是这一局用得上的。
       return table.update(id, current => ({ ...current, notes: [text, ...current.notes] }))
+    },
+    setStyle(id, style) {
+      if (table.get(id) === undefined) {
+        throw new Error(`演员池里没有 "${id}"。先 action="list" 看看都有谁。`)
+      }
+      return table.update(id, current => ({ ...current, style }))
+    },
+    setAvatar(id, image) {
+      if (table.get(id) === undefined) {
+        throw new Error(`演员池里没有 "${id}"。先 action="list" 看看都有谁。`)
+      }
+      return table.update(id, current => {
+        if (image !== '') return { ...current, avatar: image }
+        // 空串 = 换回按 id 生成的那个：**删掉字段**，而不是存一个空路径。空路径会让界面去
+        // 加载一张不存在的图，而"没这个字段"与"有张图"是两件不同的事。
+        const { avatar: _dropped, ...withoutAvatar } = current
+        return withoutAvatar
+      })
     },
   }
 }

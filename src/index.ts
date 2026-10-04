@@ -103,8 +103,32 @@ function requireActors(ctx: Context): Promise<ActorPool> {
  * @returns 可交给工具输出契约的形状。
  */
 function toActorOut(actor: Actor) {
-  return { id: actor.id, name: actor.name, style: actor.style, notes: [...actor.notes] }
+  return {
+    id: actor.id,
+    name: actor.name,
+    style: actor.style,
+    notes: [...actor.notes],
+    // 缺省（没换过图）时**不带这个字段**，而不是给空串：界面据此决定"按 id 生成一个"，
+    // 空串会让它去加载一张不存在的图。
+    ...(actor.avatar === undefined ? {} : { avatar: actor.avatar }),
+  }
 }
+
+/**
+ * 写一条性格时该照着什么写。
+ *
+ * 这两条来自设计方案 §2.2，是**验收判据**不是修辞建议：写成形容词列表的性格影响不到任何
+ * 决策（在票型上留不下痕迹），所以那样写等于没写。
+ */
+const STYLE_GUIDE = [
+  '① 写成**决策偏好**，不要写成形容词列表。',
+  '   「性格火爆、心直口快」一出手就被识破是表面功夫，也影响不到任何决策；',
+  '   写成「抓到一点就往前压，宁可压错」，它才会在票型上留下痕迹。',
+  '',
+  '② 写到**「他想选什么，但实际做成了什么」**——欲望与能力的缺口。',
+  '   原型是那个平时嘴上没把门、愿望偏偏是守口如瓶一次的人：他要的不是守住秘密，',
+  '   是体验自己能守。而他漏出去的不是内容，是行为。',
+].join('\n')
 
 /** 本子文件名 —— 工具按 `<dir>/case.yml` 找，这份约定写在 `schema/case.schema.yml` 头部。 */
 const CASE_FILE = 'case.yml'
@@ -686,12 +710,13 @@ export function apply(ctx: Context): void {
     parameters: {
       action: {
         type: 'string',
-        enum: ['list', 'add', 'note', 'show'],
-        description: 'list = 池子里都有谁（默认）；add = 招一个演员进来；note = 给他记一条跨局印象；show = 看某一个人的档案。',
+        enum: ['list', 'add', 'draft', 'style', 'avatar', 'note', 'show'],
+        description: 'list = 池子里都有谁（默认）；add = 招一个演员进来；draft = 取一份「怎么写性格」的骨架（给用户看，不落库）；style = 改他怎么玩；avatar = 给他换张头像图；note = 记一条跨局印象；show = 看某一个人的档案。',
       },
-      actor: { type: 'string', description: 'note / show 用：演员 id。add 用：新演员的 id（小写字母开头，只用小写字母、数字、下划线——它同时是存储里的记录键）。' },
+      actor: { type: 'string', description: 'note / show / draft / style / avatar 用：演员 id。add 用：新演员的 id（小写字母开头，只用小写字母、数字、下划线——它同时是存储里的记录键，也是头像生成用的种子）。' },
       name: { type: 'string', description: 'add 用：人看的名字，比如「老周」。' },
-      style: { type: 'string', description: 'add 用：这个人怎么玩游戏——不是他这一次演的角色是什么样。' },
+      style: { type: 'string', description: 'add / style 用：这个人怎么玩游戏——不是他这一次演的角色是什么样。先 action="draft" 看看该往哪儿写。' },
+      image: { type: 'string', description: 'avatar 用：头像图片的路径；传空串表示换回按 id 生成的那个。' },
       note: { type: 'string', description: 'note 用：这一局结束后他该带走的事，一两句话。' },
     },
     output: {
@@ -709,12 +734,17 @@ export function apply(ctx: Context): void {
                 name: { type: 'string' },
                 style: { type: 'string' },
                 notes: { type: 'array', items: { type: 'string' } },
+                avatar: { type: 'string' },
               },
             },
           },
+          text: { type: 'string' },
         },
       },
       render: (args, value) => {
+        if ((args.action ?? 'list') === 'draft') {
+          return [{ type: 'text', text: value.text ?? '' }]
+        }
         const list = value.actors ?? []
         if (list.length === 0) {
           return [{ type: 'text', text: '演员池是空的——用 action="add" 招一个进来。' }]
@@ -730,6 +760,9 @@ export function apply(ctx: Context): void {
         const actor = list[0]!
         const notes = actor.notes ?? []
         const lines = [`${actor.name ?? actor.id}（${actor.id}）`, actor.style ?? '']
+        lines.push(actor.avatar === undefined || actor.avatar === ''
+          ? '头像：按 id 生成的那个'
+          : `头像：${actor.avatar}`)
         lines.push(notes.length === 0
           ? '印象：还没有——一局结束后用 action="note" 记一条。'
           : `印象：\n${notes.map(one => `  · ${one}`).join('\n')}`)
@@ -745,6 +778,35 @@ export function apply(ctx: Context): void {
             throw new Error('add 需要 actor（id）/ name / style 三项都给。')
           }
           return { actors: [toActorOut(await pool.add({ id: actor, name, style }))] }
+        }
+        case 'draft': {
+          // 只**给怎么写**，不替用户写，也不落库：写出来的那条是要跨局的（这个演员以后每局
+          // 都这么玩），所以它必须经过人的眼睛。插件自己也没有调模型的通道——写属于主持人。
+          const { actor } = args
+          const existing = actor === undefined ? undefined : await pool.get(actor)
+          if (actor !== undefined && existing === undefined) {
+            throw new Error(`演员池里没有 "${actor}"——先 action="list" 看看都有谁。`)
+          }
+          const known = existing === undefined || existing.notes.length === 0
+            ? '（这个演员还没有印象——这是他的第一条性格，随你写。）'
+            : `已有的印象（新写的性格要与它相容，别打架）：\n${existing.notes.map(one => `  · ${one}`).join('\n')}`
+          return {
+            text: `${STYLE_GUIDE}\n\n${known}\n\n`
+              + '写完先给用户过目，再调 action="add"（新演员）或 action="style"（改现有的）。\n'
+              + '**不要自己直接落库**——它落进去就是跨局的，这个演员以后每一局都这么玩。',
+          }
+        }
+        case 'style': {
+          const { actor, style } = args
+          if (actor === undefined || style === undefined) throw new Error('style 需要 actor 与 style 两项都给。')
+          return { actors: [toActorOut(await pool.setStyle(actor, style))] }
+        }
+        case 'avatar': {
+          const { actor, image } = args
+          if (actor === undefined || image === undefined) {
+            throw new Error('avatar 需要 actor 与 image 两项都给——image 传空串表示换回生成的那个。')
+          }
+          return { actors: [toActorOut(await pool.setAvatar(actor, image))] }
         }
         case 'note': {
           const { actor, note } = args

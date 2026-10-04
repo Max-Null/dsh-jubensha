@@ -10,6 +10,8 @@
  * @module @max-null/dsh-jubensha
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 // 这几个 type-only import 拉入 Context 上的服务声明（agents / agentTeams / subagents）。
 // 本模块**不**把它们写进 inject：缺哪一样都该只让对应的动作报错，而不是整个插件不加载——
 // 取服务一律走运行时的 ctx.get。
@@ -17,6 +19,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SpawnTeammateResult } from '@deepseek-ai/dsh-experimental-agent-team'
 import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { loadCase, roleBook } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import { advance, createGame, isFinished, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
@@ -43,6 +46,12 @@ const NO_GAME = '还没有开局——先用 action="start" 给出 caseId / titl
 
 /** 玩家工具名。 */
 const PLAYER_TOOL = 'jubensha_player'
+
+/** 本子工具名。 */
+const CASE_TOOL = 'jubensha_case'
+
+/** 本子文件名 —— 工具按 `<dir>/case.yml` 找，这份约定写在 `schema/case.schema.yml` 头部。 */
+const CASE_FILE = 'case.yml'
 
 /**
  * 这一局的玩家登记。
@@ -85,13 +94,19 @@ const awaiting = new Map<string, { readonly seat: string; readonly name: string 
 const LEAD_NAME = 'lead'
 
 /**
- * 给座位号配的唯一后缀。
+ * 座位号后面缀什么才不撞名。
  *
- * Team 名册要求名字在**本进程的这个 Team 里**唯一，而它**不随玩家下桌释放**——同一个座位
- * 第二次上桌就撞 `TEAM_MEMBER_NAME_TAKEN`（2026-10-05 实测）。所以座位号后面缀一个单调
- * 计数。人看的是 `description`（label），这个 name 只有机器用。
+ * Team 名册**跨进程持久**：一个名字在这个 DM 的会话里用过一次，就永远不能再用
+ * （`roster.ts:271-273` 对重名抛 `TEAM_MEMBER_NAME_TAKEN`）。2026-10-05 踩了两轮才看清：
+ * 先是同进程内第二次上桌就撞，改成单调计数；重启后又撞——**计数器是进程级的，名册不是**。
+ * 所以后缀必须自带唯一性，不能依赖任何进程内状态。人看的是 `description`（label），
+ * 这个 name 只有机器用，丑一点没关系。
+ * @param seat - 座位 id。
+ * @returns 一个不与既往用过的名字相撞的 teammate 名。
  */
-let seatSerial = 0
+function teammateName(seat: string): string {
+  return `${seat}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
+}
 
 /** 从一次调用的原始入参里取 `target`；取不到就由调用方当作「没有有效对象」。 */
 function readTarget(raw: unknown): string | undefined {
@@ -188,6 +203,18 @@ function describePlayerTool(): string {
     + 'say 只负责把话送到；玩家的回答在他自己的回合里发回来，不在这次调用里等。'
 }
 
+/** 组装本子工具的描述：同样把「什么时候该调它」写在最前面。 */
+function describeCaseTool(): string {
+  return 'Read a 剧本杀 case file kept as data: which seats it has, one role\'s own brief, or one whole '
+    + 'section (the truth, the clues, the briefing script, the review questions). Call action="load" first '
+    + '— it also reports the format problems it finds, and that check is the reason cases are data instead '
+    + 'of prose. Use action="book" to get one role\'s brief verbatim and hand it to jubensha_player as its '
+    + 'roleBook: never retype it, and never hand a player another seat\'s brief. '
+    + '剧本杀本子工具：看这本有哪几个座位 / 取某个角色的角色本 / 取本子的某一段（真相、线索、带局脚本…）。'
+    + '先调 load，它会顺带报出格式问题——把本子做成数据就是为了这一步。'
+    + '给玩家上桌时用 book 取「原样」的角色本交给 jubensha_player，不要自己转述，更不要把别的座位的发给他。'
+}
+
 /**
  * 把一次调用的结果整理成工具返回值。
  *
@@ -213,7 +240,7 @@ export function apply(ctx: Context): void {
   // 留痕：本插件没有任何界面元素，装没装、注册了什么，只能从这里读——否则「加载成功」
   // 与「静默跳过」在外部看起来一模一样（peer 不满足时内核就是静默跳过的，界面不报错）。
   // 与 dsh-allostasis 同一条判据，它的 README「诊断」段记了来由。
-  console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}`)
+  console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}, ${CASE_TOOL}`)
   ctx.tools.register(defineTool({
     name: STATE_TOOL,
     description: describeTool(),
@@ -316,6 +343,112 @@ export function apply(ctx: Context): void {
     return undefined
   })
   ctx.tools.register(defineTool({
+    name: CASE_TOOL,
+    description: describeCaseTool(),
+    parameters: {
+      action: {
+        type: 'string',
+        enum: ['load', 'section', 'book'],
+        description: 'load = 加载并校验（默认）；section = 取某一段原文；book = 取某个角色的角色本。',
+      },
+      dir: { type: 'string', description: '本子目录（读其中的 case.yml），或者直接给那份文件的路径。' },
+      section: {
+        type: 'string',
+        description: 'section 用：段名，如 scene / truth / clues / emotional / briefing / style / audit / reveal。',
+      },
+      role: { type: 'string', description: 'book 用：座位 id，如 "p1"。' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          caseId: { type: 'string' },
+          title: { type: 'string' },
+          genre: { type: 'string' },
+          seats: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                player: { type: 'string' },
+              },
+            },
+          },
+          sections: { type: 'array', items: { type: 'string' } },
+          text: { type: 'string' },
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                level: { type: 'string' },
+                message: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      render: (args, value) => {
+        // load 的结果是给 DM 看的一张表；section / book 取的是原文，原样交出去——
+        // 角色本尤其不能在这里被重新排版，它要一字不差地到玩家手上。
+        if ((args.action ?? 'load') !== 'load') return [{ type: 'text', text: value.text ?? '' }]
+        const lines = [`《${value.title ?? ''}》（case ${value.caseId ?? ''}｜${value.genre ?? ''}）`]
+        for (const seat of value.seats ?? []) lines.push(`  ${seat.id}  ${seat.name}（${seat.player}）`)
+        lines.push(`  可取的段：${(value.sections ?? []).join('、')}`)
+        for (const issue of value.issues ?? []) lines.push(`  [${issue.level}] ${issue.message}`)
+        if ((value.issues ?? []).length === 0) lines.push('  校验：没有问题')
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
+    },
+    execute(args) {
+      const { dir } = args
+      if (dir === undefined) throw new Error('要给 dir——本子目录，或那份 case.yml 的路径。')
+      const file = /\.ya?ml$/.test(dir) ? dir : join(dir, CASE_FILE)
+      let source: string
+      try {
+        source = readFileSync(file, 'utf8')
+      } catch (error: unknown) {
+        throw new Error(`读不到本子：${file}（${error instanceof Error ? error.message : String(error)}）`)
+      }
+      const loaded = loadCase(source)
+      const issues = loaded.issues.map(issue => ({ level: issue.level, message: issue.message }))
+      const action = args.action ?? 'load'
+
+      if (action === 'load') {
+        return Promise.resolve({
+          caseId: loaded.id,
+          title: loaded.title,
+          genre: loaded.genre,
+          seats: loaded.roles.map(role => ({ id: role.id, name: role.name, player: role.player })),
+          sections: Object.keys(loaded.sections),
+          issues,
+        })
+      }
+      if (action === 'section') {
+        const name = args.section
+        if (name === undefined) throw new Error('section 要给段名。')
+        const value = loaded.sections[name]
+        if (value === undefined) {
+          throw new Error(`这本里没有 "${name}" 这一段。有这些：${Object.keys(loaded.sections).join('、')}`)
+        }
+        const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+        return Promise.resolve({ caseId: loaded.id, text, issues })
+      }
+      const seat = args.role
+      if (seat === undefined) throw new Error('book 要给座位 id。')
+      const role = loaded.roles.find(candidate => candidate.id === seat)
+      if (role === undefined) {
+        throw new Error(`这本里没有座位 "${seat}"。有这些：${loaded.roles.map(item => item.id).join('、')}`)
+      }
+      return Promise.resolve({ caseId: loaded.id, text: roleBook(role), issues })
+    },
+  }))
+  ctx.tools.register(defineTool({
     name: PLAYER_TOOL,
     description: describePlayerTool(),
     parameters: {
@@ -377,8 +510,8 @@ export function apply(ctx: Context): void {
           awaiting.set(dm.id, { seat, name: playerName })
           try {
             const spawned = await teams.spawnTeammate(dm, {
-              // 座位号 + 唯一后缀；中文角色名走 description，那才是 label。
-              name: `${seat}-${++seatSerial}`,
+              // 座位号 + 自带唯一性的后缀；中文角色名走 description，那才是 label。
+              name: teammateName(seat),
               description: `玩家 ${playerName}（${seat}）`,
               prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook, dmId: dm.id }) }],
               context: 'fresh',

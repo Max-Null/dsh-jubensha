@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
+import type { PlayerHandle } from './player.ts'
 import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
 
@@ -174,6 +175,45 @@ function readTarget(raw: unknown): string | undefined {
   return typeof target === 'string' ? target : undefined
 }
 
+/** 从一次 `send_message` 的原始入参里取正文；空串按「没说」处理。 */
+function readMessage(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const message = (raw as Record<string, unknown>)['message']
+  return typeof message === 'string' && message.trim() !== '' ? message : undefined
+}
+
+/** 按座位取回玩家，取不到就直接抛——每个要用座位的动作都该在这里失败。 */
+function requirePlayer(seat: string): PlayerHandle {
+  const player = players.get(seat)
+  if (player === undefined) throw new Error(`座位 "${seat}" 上没人（${tableText()}）。`)
+  return player
+}
+
+/**
+ * 把一句话送到几位玩家手里。
+ *
+ * **一个一个发，不等并发**：`sendMessage` 对忙着的目标按步边界投递，并发发多条并不会更快，
+ * 只会让"发到一半失败"时说不清谁收到了。发不出去就直接抛——**静默漏掉一个人是这一块最坏的
+ * 失败**，因为漏掉的那位不会知道自己漏了什么，而桌上其他人以为他听见了。
+ * @param ctx - 插件上下文，用来取委派服务。
+ * @param dm - 主持人 agent；消息由他发出。
+ * @param listeners - 要送到的人。
+ * @param text - 送出去的正文。
+ * @param signal - 这次工具调用的取消信号。
+ */
+async function deliver(
+  ctx: Context,
+  dm: Agent,
+  listeners: readonly PlayerHandle[],
+  text: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const subagents = requireSubagents(ctx)
+  for (const listener of listeners) {
+    await subagents.sendMessage(dm, listener.childId, [{ type: 'text', text }], { signal })
+  }
+}
+
 /**
  * 把一位玩家收窄到「只能说话」—— 两层，各管一段。
  *
@@ -187,17 +227,20 @@ function readTarget(raw: unknown): string | undefined {
  * scope 路由，所以它不问那个工具注册在哪一层。第一层漏掉的都归它兜——2026-10-05 实测拦住了
  * own 层的 `list_agents`。
  *
- * 第二层还多管一件事：**说话只说给主持人**。Team 版的 `send_message` 收 teammate 名字或
- * session id，玩家理论上能点名任何一位同伴——那会变成串供。所以这里把对象也收成一个小集合。
+ * 第二层还多管一件事：**说话只说给主持人**。Team 版的 `send_message` 收 teammate 名字，
+ * 玩家理论上能点名任何一位同伴——那会变成串供。所以这里把对象也收成一个小集合。
+ *
+ * **集合里只有 `lead`，没有主持人的 session id。** 那个 id 不是成员名，Team 按名字解析
+ * （`agent-team/src/mailbox.ts:120`），给了它也发不出去——2026-10-05 实测里那位玩家
+ * 因此一个字都没说出口。**放行一个走不通的名字，比拒绝它更坏**：拒绝至少会当场报错。
  * @param agent - 那位玩家的 agent。
  * @param seat - 座位 id，只出现在拒绝理由里，让模型知道是谁被挡了。
- * @param dmId - 主持人的 session id；spawn 时告诉玩家的就是它。
  */
-function confine(agent: Agent, seat: string, dmId: string): void {
+function confine(agent: Agent, seat: string): void {
   if (confined.has(agent)) return
   confined.add(agent)
   const allowed = new Set<string>(PLAYER_TOOLS)
-  const audience = new Set<string>([dmId, LEAD_NAME])
+  const audience = new Set<string>([LEAD_NAME])
   agent.ctx.tools.restrict({ allow: [...PLAYER_TOOLS] })
   agent.ctx.on('tools/pre-execute', (exec, next) => {
     if (!allowed.has(exec.name)) {
@@ -217,6 +260,14 @@ function confine(agent: Agent, seat: string, dmId: string): void {
     }
     return next()
   })
+  // 记下他刚说出口的那句话：桌上其他人要听见，得靠主持人转达，而主持人不该去抄内容——
+  // `action="relay"` 从这里取原件。`tools/result` 是纯观察钩子（`@mode emit`），
+  // 监听器抛错会被内核隔离，不会连累那次发言本身。
+  agent.ctx.on('tools/result', (exec, result) => {
+    if (exec.name !== SPEAK_TOOL || result.isError) return
+    const said = readMessage(exec.arguments)
+    if (said !== undefined) players.recordSaid(seat, said)
+  })
 }
 
 /**
@@ -224,13 +275,11 @@ function confine(agent: Agent, seat: string, dmId: string): void {
  * @param ctx - 插件上下文，用来取 agent 注册表。
  * @param member - `spawnTeammate` 返回的名册行。
  * @param seat - 座位 id。
- * @param dmId - 主持人的 session id。
  */
 function confineMember(
   ctx: Context,
   member: SpawnTeammateResult['member'],
   seat: string,
-  dmId: string,
 ): void {
   const agents = ctx.get('agents')
   if (agents === undefined) throw new Error(`这个部署里没有 agent 注册表，${PLAYER_TOOL} 收不了口。`)
@@ -238,7 +287,7 @@ function confineMember(
   if (agent === undefined) {
     throw new Error(`玩家 agent（${member.name}）不在注册表里，收窄没做成——先别让它上桌。`)
   }
-  confine(agent, seat, dmId)
+  confine(agent, seat)
 }
 
 /** 组装工具描述：把「什么时候该调它」写在最前面，模型据此判断而非猜。 */
@@ -253,12 +302,18 @@ function describeTool(): string {
 /** 组装玩家工具的描述：同样把「什么时候该调它」写在最前面。 */
 function describePlayerTool(): string {
   return 'Seat AI players at a 剧本杀 table and talk to them. A player is a continuable subagent '
-    + 'restricted to one tool — send_message — so it can speak to you and read nothing else: not the case '
-    + 'files, not another player\'s 角色本. Its 角色本 arrives as its first message, and every line it says '
-    + 'reaches you as a send_message from it. action="say" only delivers your line; the player answers on '
-    + 'its own turn, so never wait for a reply inside this call. '
-    + '剧本杀玩家工具：让 AI 玩家上桌 / 对某位玩家说话 / 请他下桌 / 看桌上都有谁。'
+    + 'restricted to one tool — send_message, addressed to "lead" — so it can speak to you and read '
+    + 'nothing else: not the case files, not another player\'s 角色本. Its 角色本 arrives as its first '
+    + 'message, and every line it says reaches you as a send_message from it. action="say" only delivers '
+    + 'your line; the player answers on its own turn, so never wait for a reply inside this call. '
+    + 'Use action="say" with seat="*" to speak to the whole table in one call. A player hears only what '
+    + 'you send it, so when one player says something the others should have heard, pass it on with '
+    + 'action="relay" — that replays his own words from the record, so his line reaches the table as he '
+    + 'said it rather than as you retold it. '
+    + '剧本杀玩家工具：让 AI 玩家上桌 / 对某位玩家说话 / 把某位玩家的话转达给其他人 / 请他下桌 / 看桌上都有谁。'
     + 'spawn 之后玩家只拿到自己的角色本，且只能说话——他读不到本子文件，也读不到别人的角色本。'
+    + 'say 带 seat="*" 是一次说给全桌听；玩家只听得见你发给他的东西，所以某人说了该让全桌听见的话时，'
+    + '用 relay 转达——它把那位玩家的原话放回桌上，不经过你的复述。'
     + 'say 只负责把话送到；玩家的回答在他自己的回合里发回来，不在这次调用里等。'
 }
 
@@ -394,7 +449,7 @@ export function apply(ctx: Context): void {
     // agent 的 ctx 上——所以每次都得认出来重挂一遍，否则第二个 turn 就漏了。
     const sitting = players.find(agent.session.header.id)
     if (sitting !== undefined) {
-      confine(agent, sitting.seat, sitting.dmId)
+      confine(agent, sitting.seat)
       return undefined
     }
     // 正在上桌的那一位：agent/created 比 spawnTeammate 返回得早，这是唯一赶得上的时机。
@@ -403,7 +458,7 @@ export function apply(ctx: Context): void {
     const pending = awaiting.get(parent)
     if (pending === undefined) return undefined
     awaiting.delete(parent)
-    confine(agent, pending.seat, parent)
+    confine(agent, pending.seat)
     return undefined
   })
   ctx.tools.register(defineTool({
@@ -564,10 +619,10 @@ export function apply(ctx: Context): void {
     parameters: {
       action: {
         type: 'string',
-        enum: ['list', 'spawn', 'say', 'unseat'],
-        description: 'list = 看桌上都有谁（默认）；spawn = 让一位 AI 玩家上桌；say = 把一句话转达给某位玩家；unseat = 从座位上撤掉这位玩家。',
+        enum: ['list', 'spawn', 'say', 'relay', 'unseat'],
+        description: 'list = 看桌上都有谁（默认）；spawn = 让一位 AI 玩家上桌；say = 把一句话说给某位玩家或全桌；relay = 把某位玩家刚说的话转达给桌上其余人；unseat = 从座位上撤掉这位玩家。',
       },
-      seat: { type: 'string', description: 'spawn / say / unseat 用：座位 id，要与局面里的 seats 用同一套命名。' },
+      seat: { type: 'string', description: 'spawn / say / relay / unseat 用：座位 id，要与局面里的 seats 用同一套命名。say 也可以用 "*" 表示说给全桌听。' },
       name: { type: 'string', description: 'spawn 用：角色名。' },
       roleBook: {
         type: 'string',
@@ -624,13 +679,13 @@ export function apply(ctx: Context): void {
               // 座位号 + 自带唯一性的后缀；中文角色名走 description，那才是 label。
               name: teammateName(seat),
               description: `玩家 ${playerName}（${seat}）`,
-              prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook: book, dmId: dm.id }) }],
+              prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook: book }) }],
               context: 'fresh',
               provider: 'spawn',
               signal: exec.signal,
             })
             // 兜底：万一 agent/created 没赶上（或没触发），这里再收一次，`confine` 自己去重。
-            confineMember(ctx, spawned.member, seat, dm.id)
+            confineMember(ctx, spawned.member, seat)
             players.seat({ seat, name: playerName, childId: spawned.member.id, dmId: dm.id })
           } finally {
             awaiting.delete(dm.id)
@@ -640,17 +695,31 @@ export function apply(ctx: Context): void {
         case 'say': {
           const { seat, message } = args
           if (seat === undefined || message === undefined) throw new Error('say 需要 seat 与 message 两项都给。')
-          const player = players.get(seat)
-          if (player === undefined) throw new Error(`座位 "${seat}" 上没人（${tableText()}）。`)
           const dm = exec.agent
           if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
-          await requireSubagents(ctx).sendMessage(
-            dm,
-            player.childId,
-            [{ type: 'text', text: message }],
-            { signal: exec.signal },
-          )
-          delivered = player.name
+          // seat="*" 是说给全桌听：桌上每个人都该听见，一条命令发出去，程序保证一个都不漏。
+          // 逐个手发正是"漏掉某个人"的来源，而漏掉的那个不会知道自己漏了什么。
+          const listeners = seat === '*' ? players.list() : [requirePlayer(seat)]
+          if (listeners.length === 0) throw new Error('桌上还没有 AI 玩家。')
+          await deliver(ctx, dm, listeners, message, exec.signal)
+          delivered = listeners.map(listener => listener.name).join('、')
+          break
+        }
+        case 'relay': {
+          const { seat } = args
+          if (seat === undefined) throw new Error('relay 需要 seat——要转达哪一位玩家刚说的话。')
+          const speaker = requirePlayer(seat)
+          const said = players.lastSaid(seat)
+          if (said === undefined) {
+            throw new Error(`${speaker.name} 还没开过口——没有可转达的话。`)
+          }
+          const dm = exec.agent
+          if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
+          const others = players.list().filter(player => player.seat !== seat)
+          if (others.length === 0) throw new Error(`桌上只有 ${speaker.name} 一个人，没有人可转达。`)
+          // 带上说话人：收信人的默认预期是"主持人在跟我说话"，不加署名会把这句当成我的话。
+          await deliver(ctx, dm, others, `（${speaker.name}）${said}`, exec.signal)
+          delivered = others.map(other => other.name).join('、')
           break
         }
         case 'unseat': {

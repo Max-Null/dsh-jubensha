@@ -62,23 +62,27 @@ export interface BriefInput {
   readonly name: string
   /** 角色本正文 —— DM 交给这个玩家的全部信息，也是他要守住的东西。 */
   readonly roleBook: string
-  /** DM 的 agent id：玩家的每一句发言都要发到这个 id 上。 */
-  readonly dmId: string
 }
 
 /**
  * 拼一位玩家的上台说明 —— 他这个子会话收到的第一段话。
  *
+ * **只说 `lead`，不说 session id。** Team 的 `send_message` 按成员**名字**解析目标
+ * （`agent-team/src/mailbox.ts:120` 的 `resolveActiveMember(root, state, request.target)`），
+ * 找不到就抛 `active teammate "…" not found`（`roster.ts:52`）。而主持人的 session id
+ * **不是**一个成员名——2026-10-05 实测：告诉玩家 session id，它十次全失败，一个字都没说出口；
+ * 那一局从外面看只是"这位玩家很安静"。所以这里只给一个走得通的名字，闸也只放这一个。
+ *
  * 只写游戏层的事：他是谁、话怎么传到桌上、他的角色本是什么。**不写**「你没有别的工具」
  * 这类权限说明——内核已经给每个子 agent 注入了委派范围声明（`SUBAGENT_DELEGATION_CONTEXT`），
  * 再说一遍只是噪声。
- * @param input - 座位、角色名、角色本与 DM 的 agent id。
+ * @param input - 座位、角色名与角色本。
  * @returns 作为子会话首条用户消息的文本。
  */
 export function playerBrief(input: BriefInput): string {
   return `你是「${input.name}」，坐在 ${input.seat} 号位。这是一桌剧本杀，你是**玩家**，不是助手：`
     + '你要以这个角色的身份说话、被人盘问、也盘问别人，而不是帮谁完成任务。\n\n'
-    + `你的每一句发言都要用 send_message 发给主持人，agent_id 是 "${input.dmId}"。`
+    + '你的每一句发言都用 send_message 发给 "lead"——那就是主持人，target 就填这一串。'
     + '发言没发出去，就等于你什么都没说——桌上没有人替你转达。\n'
     + '消息正文就是你说出口的话，不要加「我说：」这类前缀，也不要在消息之外补充说明。\n\n'
     + `--- 你的角色本 ---\n${input.roleBook}\n--- 角色本结束 ---\n\n`
@@ -118,6 +122,22 @@ export interface PlayerRegistry {
    * @returns 按上桌顺序排列的句柄数组（副本，改动它不影响登记表）。
    */
   list(): readonly PlayerHandle[]
+  /**
+   * 记下这个座位刚刚说出口的一句话。
+   *
+   * 玩家的发言只到主持人那里（他的唯一通道就是发给 `lead`），他要被桌上其他人听见，
+   * 得由主持人转达——而**主持人手里的原话是抄来的**。记在这里的那一句才是原件：
+   * `jubensha_player action="relay"` 直接从这儿取，不用主持人复述。
+   * @param seat - 座位 id。
+   * @param text - 他刚说出口的那句话。
+   */
+  recordSaid(seat: string, text: string): void
+  /**
+   * 这个座位最后说出口的那句话。
+   * @param seat - 座位 id。
+   * @returns 那句话；他还没开过口时为 `undefined`。
+   */
+  lastSaid(seat: string): string | undefined
 }
 
 /**
@@ -129,6 +149,7 @@ export interface PlayerRegistry {
  */
 export function createRegistry(): PlayerRegistry {
   const bySeat = new Map<string, PlayerHandle>()
+  const said = new Map<string, string>()
   return {
     seat(handle) {
       const sitting = bySeat.get(handle.seat)
@@ -147,10 +168,18 @@ export function createRegistry(): PlayerRegistry {
       return undefined
     },
     unseat(seat) {
+      // 连他最后那句话一起忘掉：下桌之后那句话不该还能被转达给一桌新人。
+      said.delete(seat)
       return bySeat.delete(seat)
     },
     list() {
       return [...bySeat.values()]
+    },
+    recordSaid(seat, text) {
+      said.set(seat, text)
+    },
+    lastSaid(seat) {
+      return said.get(seat)
     },
   }
 }

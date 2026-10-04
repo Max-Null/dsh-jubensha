@@ -18,26 +18,29 @@ function sitting(seat: string, name: string): PlayerHandle {
 }
 
 describe('上台说明', () => {
-  it('写明角色名、座位与 DM 的 agent id——玩家要靠最后那项找到收话的人', () => {
-    const brief = playerBrief({
-      seat: 'p1',
-      name: '林晚',
-      roleBook: '你那天没去过照相馆。',
-      dmId: 'dm-session-9',
-    })
+  it('话怎么传到桌上：只给 lead 这个成员名', () => {
+    const brief = playerBrief({ seat: 'p1', name: '林晚', roleBook: '你那天没去过照相馆。' })
     expect(brief).toContain('林晚')
     expect(brief).toContain('p1')
-    expect(brief).toContain('dm-session-9')
+    expect(brief).toContain('lead')
+  })
+
+  it('不把主持人的 session id 交给玩家——那不是成员名，给了它只会白试十次', () => {
+    // 2026-10-05 实测：brief 里写 session id 的那一局，那位玩家一个字都没说出口
+    // （Team 按成员名解析，见 agent-team/src/mailbox.ts:120），而外面看只是"她很安静"。
+    const brief = playerBrief({ seat: 'p1', name: '林晚', roleBook: '无' })
+    expect(brief).not.toMatch(/session/)
+    expect(brief).not.toContain('agent_id')
   })
 
   it('整份角色本原样交出去：摘要一句就少一句可守的秘密', () => {
     const roleBook = '你当晚 22:40 到过门口。\n那把钥匙是你配的。'
-    const brief = playerBrief({ seat: 'p2', name: '周野', roleBook, dmId: 'dm' })
+    const brief = playerBrief({ seat: 'p2', name: '周野', roleBook })
     expect(brief).toContain(roleBook)
   })
 
   it('指定 send_message 为唯一的发言通道——不说就等于没说过话', () => {
-    const brief = playerBrief({ seat: 'p1', name: '林晚', roleBook: '无', dmId: 'dm' })
+    const brief = playerBrief({ seat: 'p1', name: '林晚', roleBook: '无' })
     expect(brief).toContain('send_message')
   })
 })
@@ -45,6 +48,47 @@ describe('上台说明', () => {
 describe('玩家白名单', () => {
   it('只放行说话这一项：这份名单就是「玩家只能说话」的实现', () => {
     expect(PLAYER_TOOLS).toEqual(['send_message'])
+  })
+})
+
+describe('记下他说过的话', () => {
+  it('记下之后取得回来——relay 靠它拿原件，不靠主持人复述', () => {
+    const players = createRegistry()
+    players.seat(sitting('p1', '林晚'))
+    players.recordSaid('p1', '我八点前来过，坐了会儿就走了。')
+    expect(players.lastSaid('p1')).toBe('我八点前来过，坐了会儿就走了。')
+  })
+
+  it('还没开过口时取回 undefined，而不是空串——空串会被当成"他说了句空话"', () => {
+    const players = createRegistry()
+    players.seat(sitting('p1', '林晚'))
+    expect(players.lastSaid('p1')).toBeUndefined()
+  })
+
+  it('后说的盖掉先说的', () => {
+    const players = createRegistry()
+    players.seat(sitting('p1', '林晚'))
+    players.recordSaid('p1', '第一句')
+    players.recordSaid('p1', '第二句')
+    expect(players.lastSaid('p1')).toBe('第二句')
+  })
+
+  it('下桌之后那句话也忘掉——否则它能被转达给一桌新人', () => {
+    const players = createRegistry()
+    players.seat(sitting('p1', '林晚'))
+    players.recordSaid('p1', '我有事瞒着你们。')
+    players.unseat('p1')
+    expect(players.lastSaid('p1')).toBeUndefined()
+  })
+
+  it('两个人各记各的，不串', () => {
+    const players = createRegistry()
+    players.seat(sitting('p1', '林晚'))
+    players.seat(sitting('p2', '周野'))
+    players.recordSaid('p1', '甲说的')
+    players.recordSaid('p2', '乙说的')
+    expect(players.lastSaid('p1')).toBe('甲说的')
+    expect(players.lastSaid('p2')).toBe('乙说的')
   })
 })
 

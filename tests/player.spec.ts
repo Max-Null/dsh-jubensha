@@ -14,7 +14,7 @@ const CHILD = 'child-1' as PlayerChildId
 
 /** 一台上桌的玩家。 */
 function sitting(seat: string, name: string): PlayerHandle {
-  return { seat, name, childId: CHILD }
+  return { seat, name, childId: CHILD, dmId: 'dm-session-9' }
 }
 
 describe('上台说明', () => {
@@ -57,6 +57,16 @@ describe('玩家登记', () => {
 
   it('空座位取回 undefined，而不是一个假玩家', () => {
     expect(createRegistry().get('p3')).toBeUndefined()
+  })
+
+  it('按子会话 id 也找得回玩家——续命子会话每次 activation 都要靠它重新认人', () => {
+    const players = createRegistry()
+    players.seat(sitting('p1', '林晚'))
+    expect(players.find(CHILD)?.seat).toBe('p1')
+  })
+
+  it('不在座上的子会话 id 找不回人', () => {
+    expect(createRegistry().find('nobody')).toBeUndefined()
   })
 
   it('同一个座位不能坐两个人——静默替换会把先上桌的变成没人收的孤儿', () => {

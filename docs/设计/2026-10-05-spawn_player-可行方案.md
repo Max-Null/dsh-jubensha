@@ -1,8 +1,7 @@
-# `spawn_player` 的可行方案 —— 「只给玩家说话能力」怎么实现
+# AI 玩家「只能说话」怎么落地 —— `jubensha_player` 的实现
 
-> 这份文档自包含：从「要解决什么」到「照哪个范例抄」，证据全部给到源码位置。
-> 2026-10-05 已按它实现并实测通过（`src/player.ts` 与 `src/index.ts` 里的 `jubensha_player`）。
-> §五 逐条标了哪些是读码确证、哪些已实测、哪些仍待办；§六 是那次实测的记录。
+> 这份文档自包含：从「要解决什么」到源码位置，再到三次迭代踩过的坑。
+> 2026-10-05 实现并实测通过。§五 标了哪些是读码确证、哪些已实测、哪些仍待办；§六 是那两个时序坑。
 
 ## 一、要解决什么
 
@@ -10,273 +9,219 @@ AI 玩家必须**只能说话**：它要知道自己的角色本、能上桌发�
 但**读不到本子文件**（工作区是共享的，真相手册、别人的角色本都在那儿）。
 
 设计出处：[`2026-10-04-单机剧本杀-设计方案.md`](2026-10-04-单机剧本杀-设计方案.md) §3.4 第 2 条。
-那条当时的结论是「**能否做成插件、怎么做到，需要单独验证，不能凭架构推断**」——
-本文档就是那次验证的结果。
+那条的实测依据是一次探针事故：**一个 agent 被明确告知「不要使用任何工具」，仍然调了 `memory_save`
+并把测试串写进了记忆库。** 所以「靠 prompt 划边界」不足以作为方案。
 
-**已经排除的路**（2026-10-04 读码确证）：
+## 二、选型
 
-- `spawn_teammate` 的入参**没有**权限或工具集字段。本会话实际拿到的工具 schema 只有
-  `name` / `description` / `prompt` / `context` 四项，与当时读 `SpawnTeammateRequest` 的结论一致。
-- 用文件策略（`danger-full-access` + 审批禁用）挡不住：审批在这个策略下自动拒绝，
-  而且改会话策略会**连 DM 一起限**。
+### 2.1 被排除的两条路
 
-## 二、找到的机制：`ToolRuntime.restrict()`
+**① 子 agent 的 `toolFilter`**（官方在子 agent 创建窗口施加 `tools.restrict()` 的那个字段）。
+它是**收窄工具最省事的**一条，但要放弃 Team：`SpawnTeammateRequest`（`packages/experimental/agent-team/src/types.ts:166-173`）
+六个字段 `name / description / prompt / context / provider / signal` 里**没有它**，而 `roster.ts:286-289`
+转发时也只传 `prompt` 与 `parent`。
 
-`@deepseek-ai/dsh-tools` 的 `ToolRuntime` 上有一个现成 API：
+**② 纯 prompt 纪律**（「你不许用工具」）。第一局实践过，就是 §一 那次事故。
 
-```ts
-/**
- * Restrict global tools for the calling agent scope. …
- * @param filter - global-tool mask: `allow` (keep only) and/or `deny` (remove).
- * @returns the exact disposer that lifts this restriction.
- */
-restrict(filter: ToolRestriction): () => void
+### 2.2 采用的：Team 建人 + 插件两层收窄
 
-/** Per-scope filter over global tools. Restrictions intersect and do not affect
- *  scoped registrations or the reserved PTC mode transport. */
-export interface ToolRestriction {
-    /** Global tool names that stay visible; everything else is removed. */
-    readonly allow?: readonly string[];
-    /** Global tool names removed from visibility. */
-    readonly deny?: readonly string[];
-}
-```
+**玩家用 `spawnTeammate` 创建，然后由插件在它的 agent ctx 上收窄。**
 
-**关键性质**（全部摘自同一份类型声明 `dsh-tools/lib/types/index.d.ts`）：
+选 Team 不是审美偏好 —— 它有两局实测支撑（`cases/03-没拆的那封信/run-03-复盘.md:88-95`）：
 
-| 性质 | 出处 | 对我们的意义 |
-|---|---|---|
-| 作用域是「**the calling agent scope**」 | `restrict` 的 JSDoc | 在**某一个 agent** 的 ctx 上调，不影响别人 —— DM 不受影响 |
-| **不可见 = 从模型视角不存在** | `resolveExecution` 的 JSDoc：`Denial surfaces as UNKNOWN_TOOL … matching an absent definition`；`get()` 的 JSDoc：`a restricted-away global reads as absent` | 玩家**根本看不到**文件工具，不会去试 |
-| 过滤的是**继承层**，**不含自己那层** | `view()` 的 JSDoc：`A restriction filters what a scope inherits — the global layer and every ancestor layer on its chain — and never what its OWN layer registers` | 关键：工具若被挪到 agent 平面（preset 就是这么干的），它们成为**祖先层贡献**，filter **仍然管得住** |
-| 与 `guard` 是两套东西 | `guard()` 的 JSDoc：`a returned string denies the execution` | `restrict` **隐藏**、`guard` **拒绝**。给玩家用前者：他看不到就不会反复尝试 |
+| | case-01 | case-02 | case-03 |
+|---|---|---|---|
+| AI 实现 | `subagent`（一次性） | `teammate`（持久） | `teammate`（持久） |
+| 记忆漂移 | **有**（被玩家抓包） | 无 | 无 |
 
-### 那条「曾经失效过」的历史正好是我们的安全保障
+第 1 局漂移的根源是**一次性**：每次调用新建一个 agent、没有会话记忆，DM 只能手抄重建，
+重建必然有偏差。**持久性来自 `ctx.subagents.startContinuable`** —— 而 `spawnTeammate` 内部调的
+就是它（`agent-team/src/roster.ts:282`）。所以「Team 拿不到 `toolFilter`」不是「Team 不行了」，
+只是那一个字段不可用；收窄改由插件自己做。
 
-`view()` 的 JSDoc 里记着一次真实回归：
-
-> Reading the exempt set as "the global layer" instead of "not mine" held only while every
-> model-facing tool sat in the host composition. **Once presets moved them onto the agent plane
-> they became an ANCESTOR contribution, so a child's filter silently stopped constraining
-> anything it was given.**
-
-也就是说：这条路径**坏过一次**（工具搬到 agent 平面后，子 agent 的过滤器静默失效），
-而**现在修好了**。我们踩在修好的版本上，但这也提醒：**升级内核后要重测这条**。
-
-### 2.1 官方已经把同一条路封装好了：`toolFilter`
-
-**这是本文档最重要的一条** —— 要做的事，DSH 在**子 agent 创建**这条路上已经内建。
-官方实现里就一行（`subagent/src/child-agent.ts:218`）：
+## 三、创建
 
 ```ts
-if (composition.toolFilter !== undefined) childCtx.tools.restrict(composition.toolFilter)
-```
-
-也就是说：**`restrict()` 正是官方给子 agent 收窄工具时用的那个调用**，并被封装成了 spawn 请求的字段：
-
-- 字段类型就是 §二 的 `ToolRestriction`（`subagent/src/types.ts:192`）
-- 需要 provider 声明能力 `SubagentCapabilities.toolFilter`（`types.ts:134`）；
-  `subagent-spawn-in-process` 声明了 `toolFilter: true`（其 `src/index.ts:46`），而
-  **Agent Teams 的默认 provider 就是 `spawn`**（`agent-team-profile/cordis.patch.yml` 里的
-  `freshProvider: spawn`）—— 所以这条路对我们是通的。
-
-**两条行为已被官方测试固定**（`subagent-spawn-in-process/tests/`）：
-
-| 行为 | 测试标题 |
-|---|---|
-| `deny` 的工具**既从子 agent 的提示里消失，也拒绝执行** | `toolFilter hides denied tools from the child prompt AND refuses their execution` |
-| **filter 里写了不存在的工具名 → spawn 直接失败**，且不留孤儿 agent | `an unknown toolFilter name fails the spawn loudly with no orphaned child` |
-
-第二条是**部署时就会炸**的错误，不是运行时静默失效 —— 这是好事，宁可它响亮地失败。
-
-**两个已被官方处理的陷阱**：只给 `deny` 不给 `allow` 时**不会** materialize 成空 allow-list
-（防 deny-all `it('a partial toolFilter (deny only) does not materialize an empty allow-list (deny-all trap)')`）；
-而**空 filter（两个都不给）会在插件加载时直接报错**（`tool-subagent/src/index.ts:318`）。
-
-## 三、照哪个范例抄
-
-`@deepseek-ai/dsh-experimental-tool-agent-team` 做的就是同一件事——
-**给一类 agent 装一套特定工具**。它的源码（`tool-agent-team/src/index.ts`）是我们的模板：
-
-```ts
-// :163-165  在「某一个 agent 自己的 scope」上注册
-const scoped = agent.ctx
-register(scoped.tools.register(defineTool({ name: 'spawn_teammate', … })))
-
-// :190-192  创建成员走 Team 服务
-const agent = callingAgent(exec.agent, 'spawn_teammate')
-const result = await ctx.agentTeams.spawnTeammate(agent, { … })
-
-// :401-421  安装模式：遍历现有 agent + 订阅后续创建
-if (installed.has(agent) || ctx.agentTeams.tryMembership(agent) === undefined) return
-for (const agent of ctx.agents.list()) maybeInstall(agent)
-```
-
-**我们要抄的是最后那段的结构**，把「安装工具」换成「施加限制」：
-
-1. 订阅 agent 创建（`ctx.on('agent/created', …)`，与官方同一事件）
-2. `ctx.agents.list()` 补扫已存在的
-3. **认出哪些是我们的玩家**
-4. 对它们：`agent.ctx.tools.restrict({ deny: [...] })`
-5. **保留 disposer**，agent 销毁时撤销（官方同样按 disposer 逆序撤销）
-
-## 四、方案
-
-### 4.1 玩家怎么创建
-
-**结论（读完 `agent-team` 的 spawn 实现后修正）**：原先倾向的「复用 Team」这条路**拿不到
-`toolFilter`**。证据是死的 —— 请求类型里根本没有那个字段：
-
-```ts
-// agent-team/src/types.ts:166-173
-export interface SpawnTeammateRequest {
-  readonly name: string
-  readonly description: string
-  readonly prompt: ContentBlock[]
-  readonly context: 'fresh' | 'fork'
-  readonly provider: string
-  readonly signal: AbortSignal        // ← 没有 toolFilter
-}
-
-// agent-team/src/roster.ts:282-291 —— spawn 时只透传了这两项
-started = await this.ctx.subagents.startContinuable({
-  childId, provider: request.provider, label: description,
-  request: { prompt: request.prompt, parent: root },   // ← 没有 toolFilter
-  signal,
+const spawned = await ctx.agentTeams.spawnTeammate(dm, {
+  name: `${seat}-${++seatSerial}`,      // 见 §六 的第三次迭代
+  description: `玩家 ${playerName}（${seat}）`,   // 这一项才是人看的 label
+  prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook, dmId: dm.id }) }],
+  context: 'fresh',
+  provider: 'spawn',
+  signal: exec.signal,
 })
 ```
 
-**所以首选改为直连 subagent 服务**：
+返回值 `SpawnTeammateResult.member.id` 是 `SessionId`（`agent-team/src/types.ts:59`），
+拿它取回 agent 再收窄。
+
+**两处容易踩的**：
+
+- **`context` 必须是 `'fresh'`**。`'fork'` 会让玩家继承 DM 的对话历史——那里面有真相、
+  有别人的角色本，**恰好是信息隔离要挡住的东西**。
+- **`name` 有格式与唯一性约束**（lower-kebab-case，且同一 Team 内不可重名），
+  中文角色名进不去，所以让它走 `description`。
+
+## 四、收窄：两层，各管一段
+
+### 4.1 第一层 `tools.restrict` —— 管「看不看得见」
 
 ```ts
-await ctx.subagents.startContinuable({
-  childId, provider: 'spawn', label: '玩家 p1',
-  request: { prompt, parent: leadAgent, toolFilter: { allow: [...] }, persona: 角色本 },
-  signal,
+agent.ctx.tools.restrict({ allow: ['send_message'] })
+```
+
+不在白名单里的工具对玩家**根本不存在**，模型不会去试。实测把继承层从 **146 个工具清到 0**。
+
+但它有一条**定义上的边界**：`view()` 的 JSDoc 写着
+`A restriction filters what a scope inherits … and never what its OWN layer registers`
+（`packages/core/tools/src/index.ts:1180-1209`）。而内核的委派工具 `subagent` 正是每个 agent
+创建时注册进**它自己那层**的（`subagent/tool-subagent/src/index.ts:665-683` 用 `candidate.ctx`）
+——那一层它管不着。
+
+### 4.2 第二层 `tools/pre-execute` —— 管「准不准执行」
+
+```ts
+agent.ctx.on('tools/pre-execute', (exec, next) => {
+  if (!allowed.has(exec.name)) return Promise.resolve({ kind: 'deny', reason: … })
+  return next()
 })
 ```
 
-**为什么这样反而更好**（不是退而求其次）：
+**这是补上那个缺口的地方，也是官方自己指的路**：`shell/tool-bash/src/index.ts:9` 的 TODO 原文是
+`deployment policy belongs in tools/pre-execute`。机制在 `core/tools/src/index.ts:1504-1519`：
+它在**工具解析之后、执行之前**跑，carrier 是 `scopeTarget(this, exec.agent)` —— 按**执行者本人**
+的 scope 路由，所以**它不问那个工具注册在哪一层**。deny 之后走 `materializeFinalResult`，
+模型收到一条带理由的 `isError` 结果。
 
-- **`toolFilter` 直接可用** —— 官方在 `child-agent.ts:218` 替我们调 `restrict`，零自定义。
-- **continuable 自带 sendMessage** —— 不必借 Team 的 mailbox 来给玩家发话。
-- **玩家不该进 Team 的 roster** —— 它是玩家，不是同事。Team 那套（任务板、write scope、
-  Lead 权限）对一张剧本杀的桌子全是噪声。
+实测（玩家会话里的原话）：
 
-**原先那句「玩家进 Team 才收得到消息」是个假前提**：消息能力来自 continuable，
-不是来自 Team。A 路唯一多给的是一套用不上的协作机制。
+```
+Error: 座位 p2 上只做一件事：说话。list_agents 用不了。
+```
 
-**兜底仍然成立**：即便将来 `toolFilter` 不可用，`restrict()` 是公开 API（§二），
-插件可以在 `agent/created` 里自己调 —— 但那时需要「认出这是玩家」的判据（§4.2）。
-**直连创建让我们在创建那一刻就知道是谁，那个判据问题随之消失。**
+> `tools.guard` 也能担这一层（它是 monotonic 的、只能 deny）。这里用 `pre-execute` 是因为它
+> 还能读到 `exec.arguments` —— §4.3 要用。
 
-### 4.2 玩家的登记（不再是「识别」问题）
+### 4.3 顺带收掉「对谁说话」
 
-§4.1 改成直连创建之后，**「这个 agent 是不是玩家」不再需要事后识别** ——
-创建那一刻就是我们自己调的，`childId` 一直在手里。
+Team 版的 `send_message` 收 teammate 名字或 session id，玩家理论上能点名任何一位同伴——
+**那会变成串供**。所以同一道闸里再判一次对象：
 
-但登记仍然要有，只是作用变了：它承载的是**游戏数据**，而不只是身份标记 ——
-哪个 child 演哪个角色、角色本是什么、这一局的发言记录挂在哪。
+```ts
+if (exec.name === SPEAK_TOOL) {
+  const target = readTarget(exec.arguments)
+  if (target === undefined || !audience.has(target)) return deny(…)
+}
+```
 
-一个 `Map<SeatId, PlayerHandle>` 就够：键是游戏里的位子（`p1`/`p2`…），值是 child 句柄。
-**注意与插件已有的 `state.ts` 对齐** —— `GameState.seats` 里存的就是这些位子 id，
-两处别各造一套命名。
+`audience` = 主持人的 session id + `'lead'`（`spawn_teammate` 给每个成员的初始说明里就写着
+Lead 叫这个名字）。
 
-### 4.3 白名单里放什么
+实测（玩家会话里的原话）：
 
-**只保留一个：`send_message`** —— 对 DM 说话。这就是「玩家只能说话」的全部实现。
-
-**白名单式比逐个 deny 稳**：新内核会加新工具，逐个 deny 的清单会过期，而 `allow`
-只保留点名的那些。代价是名单里的名字必须真实存在（`restrict()` 对未知名字抛错，
-错误信息还会列出全部已知工具名）——而这里的失败模式恰好是我们想知道的：
-少了 `send_message`，就等于玩家没法开口。
-
-> 注意语义差别：`allow` 是「**只保留**这些，其余移除」，不是「额外放行」。
-
-**一条实测出来的边界**（见 §六）：`allow` 只过滤 scope **继承**到的工具，管不到 agent
-**自己那层**注册的。内核的委派工具 `subagent` 属于后者，所以玩家实际看到两个工具而不是一个。
-要连它一起收，得另加 `tools.guard()`。
+```
+Error: 座位 p1 只能对主持人说话，"table" 不是主持人。
+```
 
 ## 五、确证 / 已验证 / 仍待办
 
 **读码确证**：
 
-- `spawn_teammate` 工具无权限字段（运行时 schema 四项）
-- `ToolRuntime.restrict(filter)` 存在，作用域是 calling agent scope，语义是隐藏
-- `agent.ctx` 是 agent 自己的 scope（`tool-agent-team` 就这么用）
-- 创建成员走 `ctx.agentTeams.spawnTeammate(caller, request)`
-- 安装模式：遍历 `ctx.agents.list()` + 订阅创建事件 + disposer 撤销
+- `SpawnTeammateRequest` 无工具集字段（`agent-team/src/types.ts:166-173`）
+- `spawnTeammate` 内部调 `startContinuable`（`agent-team/src/roster.ts:282`）——持久性来自那里
+- `restrict` 只过滤继承层（`core/tools/src/index.ts:1180-1209`）
+- `pre-execute` 按执行者 scope 路由（同上 `:1504-1519`），官方指路见 `tool-bash/src/index.ts:9`
 
 **已实测**（2026-10-05，隔离实例，记录见 §六）：
 
-1. **`toolFilter` 真的收窄了玩家的工具面** —— 玩家模型请求里的 `tools` 是
-   `send_message, subagent`；同期 DM 那边有 `pwsh` / `read` / `render_ui` / `jubensha_*` 全套。
-2. **`startContinuable` 返回 `{ childId, messageId }`**（`subagent/src/types.ts:53-58`）。
-   `childId` 是跨 activation 稳定的 durable 子会话 id，拿它发话就够，不需要别的句柄。
-3. **`restrict` 的 disposer 不用自己管** —— `applyChildComposition` 直接丢弃返回值
-   （`subagent/src/child-agent.ts:218`），因为它是挂在子 scope 上的 effect，随 scope 销毁撤销。
-4. **未知工具名响亮失败**，报错列出全部已知工具名，且不留孤儿子会话。
+1. **玩家真的上桌了**：`spawn` 返回 `{"players":[{"seat":"p1","name":"林晚"}],"delivered":"林晚"}`，
+   `isError: false`；会话目录里多出一个子会话。
+2. **收窄生效且跨 activation 稳定**：玩家会话里 `[5 次] 10 个工具`，**只有一种签名**。
+3. **第一层清了继承层**：146 个工具 → 0（玩家请求里再也看不到 `pwsh` / `read` / `edit` / `jubensha_*`）。
+4. **第二层拦住 own 层**：`list_agents` 被拒（§4.2 的原文）。
+5. **对象也收住了**：非主持人的 target 被拒（§4.3 的原文）。
+6. **玩家能被 DM 盘问**：五轮对话，玩家在第 5 轮准确复述第一轮自己说的话与多轮前的追问方式——
+   上下文保留（那是选 Team 的那条理由）。
 
 **仍待办**：
 
-1. **`subagent` 绕过白名单**（§六 末尾）。它是 per-agent 注册的，`allow` 管不到。
-   要连它一起收需要 `tools.guard()` —— 而**「guard 挡得住 own 层」这一条本身还没验过**，
-   别当成已知结论用。
-2. **升级内核后重测上面四条**（§二 末尾那条回归说明：这条路径坏过一次）。
-3. **玩家会出戏汇报**：实测里玩家有几次不发台词，改发「进展（林晚侧）：已向主持人确认口径…」
-   这类元层面汇报。上台说明需要更硬的约束。
+1. **玩家看得见 10 个工具、只能用 1 个**。那 10 个是走 Team 的必然残留：Team 成员的
+   `spawn_teammate` / `team_task_*×4` / `wait_agent` / `interrupt_agent` / `list_agents`，
+   加上内核的 `subagent` —— 全部注册在 agent 自己那层，`restrict` 管不到。
+   **安全上没问题**（闸兜住了），代价是占 prompt 空间、可能引它试一次。
+   「进 roster」与「工具面绝对干净」在机制上不可兼得。
+2. **一局结束后那些 teammate 名字不会释放**（§六 第三次迭代）。
+3. **玩家会出戏**：实测里它几次不发台词，改发「进展（林晚侧）：已向主持人确认口径…」这类
+   元层面汇报。上台说明（`playerBrief`）需要更硬的约束。
+4. **升级内核后重测上面六条**。`restrict` 有过一次真实回归（工具搬到 agent 平面后子 agent 的
+   过滤器静默失效，见 `view()` 的 JSDoc），这条路径是修好之后的版本。
 
-**验证环境**：`.ssid-iso-test` 的隔离实例（已启用 Agent Teams + 本插件，见
-`.ssid-iso-test/launch-dev-with-pluginset.ps1`）。探针：`probe-tool-call.mjs`（工具调用）、
-`dump-session-tools.mjs`（请求里的工具面）、`grep-session.mjs`（按关键词取全文）、
-`jubensha-drive.mjs`（驱动会话）。
+**验证环境**：`.ssid-iso-test` 的隔离实例（`launch-dev-with-pluginset.ps1`，CDP 9222）。
+探针：`jubensha-drive.mjs`（驱动会话）、`probe-tool-call.mjs`（工具调用）、
+`dump-session-tools.mjs`（请求里的工具面）、`grep-session.mjs`（按关键词取全文）。
 
-## 六、一次实测：玩家上桌之后看到了什么
+## 六、三次迭代与两个时序坑
 
-2026-10-05 在 `.ssid-iso-test` 的隔离实例上跑通：DM 调 `jubensha_player` 开出 p1「林晚」，
-再用 `say` 和它对话了五轮。
+这一节记的是**为什么最终长成这样**——三次迭代里有两次是被实测打回来的。
 
-**它真的上桌了** —— spawn 返回 `{"players":[{"seat":"p1","name":"林晚"}],"delivered":"林晚"}`，
-`isError: false`；`sessions-ssid-dev` 下多出一个子会话（`162d4a39-…`）。
+### 第一次：收窄挂在 spawn 返回之后 —— 输了
 
-**它的工具面被收窄了**，这是直接证据而非行为推断。玩家会话日志里 `request/header` 事件的
-`data.header.tools` 是：
+```ts
+const spawned = await teams.spawnTeammate(dm, {…})
+confineMember(ctx, spawned.member, seat)     // 来晚了
+```
 
-    send_message, subagent
+`startContinuable` 是 **resolve 在「inbox acceptance」** 的（`tool-subagent/src/index.ts:528`
+的注释原话：`Resolves at inbox acceptance: the child owns its own turns from there`）——
+也就是说 `spawnTeammate` 返回时，玩家的 turn **可能已经在跑**。
 
-而同一会话根下 DM 自己的会话有 `pwsh`、`read`、`render_ui`、`jubensha_state`、
-`jubensha_player` 一整套。
+实测打脸：玩家会话的工具面是 `[2 次] 146 个工具` + `[1 次] 10 个工具` ——
+**头两个请求带着全套工具**（`pwsh` / `read` / `edit` 都在），第三个才是收窄后的。
 
-**为什么必须看请求里的清单，而不是问它「你能读文件吗」**：我确实下过一条指令，要玩家用
-`read` 读一个宿主路径。它回：
+### 第二次：改用 `agent/created` —— 但只挂了一次
 
-> 你这句不是桌上该说的话。我是林晚，p1，玩家。你要文件里的字段，去找管这摊事的人，
-> 别拿剧本来问我。
+`agent/created` 比返回值早，是唯一赶得上的时机。但那一刻只拿得到一个 Agent、
+**认不出它是不是玩家**，于是加了一张登记表：
 
-**这句话既像「我没有 read」，也像「我不干」。** 一个在角色里的 agent 拒绝出戏要求是正常反应。
-行为证据在这里分不开这两种解释，只有请求里的 `tools` 清单能。
+```ts
+const awaiting = new Map<string, { seat, name }>()   // DM 的 session id → 待上桌的那位
+```
 
-### 那个多出来的 `subagent`
+spawn 前登记、`agent/created` 里按 `parentSession` 认领。这一版**第一个请求就干净了**。
 
-`allow: ['send_message']` 按语义是「只保留这一个」，玩家却看到两个。原因不在配置写错，
-而在 `restrict` 的定义边界：
+但换一个更长的会话再测，工具面又变成 `[1 次] 10 个工具` + `[4 次] 146 个工具` ——
+**限制在第一个请求生效过，后面又变回全套。**
 
-- `view()` 的规则是限制只过滤 scope **继承**到的东西 —— global 层与链上每一层祖先 ——
-  **从不包括它自己那层**（`core/tools/src/index.ts:1180-1209`）
-- 而 `subagent` 是内核委派工具，每个 agent 创建时用**它自己的 ctx** 注册
-  （`subagent/tool-subagent/src/index.ts:665-683` 的 `candidate.ctx`）
+原因是**续命子会话每次 activation 都是一个新的 Agent 对象**（官方 `tool-subagent` 的
+`installScoped` 用 `agent/created` + `agent/disposed` 维护映射，正是预期它会反复创建），
+而收窄挂在 agent 的 ctx 上。所以 **`confine` 必须在每次 `agent/created` 时重挂**，判据不能是
+「正在上桌」那张临时表，得是**在座登记表**：
 
-三条观察互相印证，机制闭合：
+```ts
+ctx.on('agent/created', ({ agent }) => {
+  const sitting = players.find(agent.session.header.id)   // 已在座的：重挂
+  if (sitting !== undefined) { confine(agent, sitting.seat, sitting.dmId); return undefined }
+  …                                                        // 正在上桌的：认领
+})
+```
 
-| 工具 | 结局 | 与机制一致 |
-|---|---|---|
-| `send_message` | 留下 | 在 `allow` 里，且全局注册 |
-| `subagent` | 留下 | per-agent 注册（own 层），`restrict` 管不到 |
-| `subagent_fork` | 移除 | 全局注册，可被过滤 |
+`players.find(childId)` 就是为这条加的（`player.ts` 的 `PlayerRegistry`）。
+修完实测 `[5 次] 10 个工具`、**只有一种签名**。
 
-第三条那份清单是顺手拿到的：往 `PLAYER_TOOLS` 里塞一个不存在的名字，spawn 会响亮失败并
-吐回全部已知工具名 —— 表里有 `send_message` 和 `subagent_fork`，**没有** `subagent`。
+### 第三次：`TEAM_MEMBER_NAME_TAKEN`
 
-**后果有多严重**：玩家能自己开子 agent。那些子 agent 的祖先链上带着同一个 restriction，
-所以**读不到文件**这件事没有被破坏；但它不是设计想要的「只能说话」，而且会消耗 agent 配额。
-修法是另加 `tools.guard()` —— guard 是执行时的检查，与工具注册在哪一层无关。
+用座位号当 teammate 名字，同一个座位第二次上桌就撞：
+
+```json
+{"name":"TeamError","code":"TEAM_MEMBER_NAME_TAKEN"}
+```
+
+`roster.ts:271-273` 对重名直接抛。**名字不随玩家下桌释放**，所以在同一个进程里
+`p1` 只能用一次。改成 `${seat}-${++seatSerial}` —— 人看的是 `description`（label），
+这个 name 只有机器用。
+
+### 一条一般化教训
+
+两次时序坑是同一类：**「什么时候挂上」和「挂在哪个对象上」，在生命周期里是两个独立的问题。**
+第一次错在挂得太晚，第二次错在只挂给了一个会消失的对象。判据是：**问那个承载物会不会被重建** ——
+会的，就得把挂载点挪到「每次重建都会触发的那个事件」上，而不是挪到「更早的时刻」。

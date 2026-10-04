@@ -10,11 +10,14 @@
  * @module @max-null/dsh-jubensha
  */
 import type { Context } from '@deepseek-ai/cordis'
-// 这个 type-only import 拉入 Context 上的 `subagents` 声明。本模块不把它写进 inject：
-// 没有委派能力的部署仍该能用局面工具，取服务走运行时的 ctx.get。
-import type { ContinuableStartSpec } from '@deepseek-ai/dsh-subagent'
+// 这几个 type-only import 拉入 Context 上的服务声明（agents / agentTeams / subagents）。
+// 本模块**不**把它们写进 inject：缺哪一样都该只让对应的动作报错，而不是整个插件不加载——
+// 取服务一律走运行时的 ctx.get。
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { SpawnTeammateResult } from '@deepseek-ai/dsh-experimental-agent-team'
+import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { createRegistry, playerBrief, PLAYER_TOOLS } from './player.ts'
+import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import { advance, createGame, isFinished, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
 
@@ -63,6 +66,105 @@ function requireSubagents(ctx: Context) {
     throw new Error(`这个部署里没有 subagent 服务，${PLAYER_TOOL} 用不了——需要 @deepseek-ai/dsh-subagent 与 subagent-spawn-in-process。`)
   }
   return subagents
+}
+
+/** 已经收窄过的玩家。`agent/created` 与 spawn 返回后各会调一次，靠它去重。 */
+const confined = new WeakSet<Agent>()
+
+/**
+ * 正在等座位主人的 DM —— DM 的 session id → 那位待上桌玩家的座位与角色名。
+ *
+ * **为什么需要它**：收窄必须赶在玩家的第一个请求之前，而 `spawnTeammate` 返回时玩家可能
+ * 已经跑起来了（2026-10-05 实测：头两个请求带着全套工具，第三个才是收窄后的）。`agent/created`
+ * 比它早，但那一刻只拿得到一个 Agent、认不出它是不是玩家——这张登记表就是那个判据：
+ * 以某位 DM 为父、而且这位 DM 正在等人，来者即玩家。
+ */
+const awaiting = new Map<string, { readonly seat: string; readonly name: string }>()
+
+/** Team 里主持人固定的名字——`spawn_teammate` 给每个成员的初始说明里就写着它。 */
+const LEAD_NAME = 'lead'
+
+/**
+ * 给座位号配的唯一后缀。
+ *
+ * Team 名册要求名字在**本进程的这个 Team 里**唯一，而它**不随玩家下桌释放**——同一个座位
+ * 第二次上桌就撞 `TEAM_MEMBER_NAME_TAKEN`（2026-10-05 实测）。所以座位号后面缀一个单调
+ * 计数。人看的是 `description`（label），这个 name 只有机器用。
+ */
+let seatSerial = 0
+
+/** 从一次调用的原始入参里取 `target`；取不到就由调用方当作「没有有效对象」。 */
+function readTarget(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const target = (raw as Record<string, unknown>)['target']
+  return typeof target === 'string' ? target : undefined
+}
+
+/**
+ * 把一位玩家收窄到「只能说话」—— 两层，各管一段。
+ *
+ * **第一层 `restrict`** 管的是可见性：不在白名单里的工具对玩家**根本不存在**，模型不会去试。
+ * 但它按定义只过滤 scope **继承**到的东西（`view()` 的 JSDoc：`never what its OWN layer
+ * registers`），而内核的委派工具 `subagent` 正是每个 agent 创建时注册进**它自己那层**的
+ * （`subagent/tool-subagent/src/index.ts:665-683` 用 `candidate.ctx`）——那一层它管不着。
+ *
+ * **第二层 `tools/pre-execute`** 管的是准不准执行：它在工具解析之后、执行之前跑，carrier 是
+ * `scopeTarget(this, exec.agent)`（`core/tools/src/index.ts:1504-1505`），按**执行者本人**的
+ * scope 路由，所以它不问那个工具注册在哪一层。第一层漏掉的都归它兜——2026-10-05 实测拦住了
+ * own 层的 `list_agents`。
+ *
+ * 第二层还多管一件事：**说话只说给主持人**。Team 版的 `send_message` 收 teammate 名字或
+ * session id，玩家理论上能点名任何一位同伴——那会变成串供。所以这里把对象也收成一个小集合。
+ * @param agent - 那位玩家的 agent。
+ * @param seat - 座位 id，只出现在拒绝理由里，让模型知道是谁被挡了。
+ * @param dmId - 主持人的 session id；spawn 时告诉玩家的就是它。
+ */
+function confine(agent: Agent, seat: string, dmId: string): void {
+  if (confined.has(agent)) return
+  confined.add(agent)
+  const allowed = new Set<string>(PLAYER_TOOLS)
+  const audience = new Set<string>([dmId, LEAD_NAME])
+  agent.ctx.tools.restrict({ allow: [...PLAYER_TOOLS] })
+  agent.ctx.on('tools/pre-execute', (exec, next) => {
+    if (!allowed.has(exec.name)) {
+      return Promise.resolve({
+        kind: 'deny',
+        reason: `座位 ${seat} 上只做一件事：说话。${exec.name} 用不了。`,
+      })
+    }
+    if (exec.name === SPEAK_TOOL) {
+      const target = readTarget(exec.arguments)
+      if (target === undefined || !audience.has(target)) {
+        return Promise.resolve({
+          kind: 'deny',
+          reason: `座位 ${seat} 只能对主持人说话${target === undefined ? '' : `，"${target}" 不是主持人`}。`,
+        })
+      }
+    }
+    return next()
+  })
+}
+
+/**
+ * 从名册行取回 agent 再收窄。拿不到就抛——静默放过等于让一位不受限的玩家坐上了桌。
+ * @param ctx - 插件上下文，用来取 agent 注册表。
+ * @param member - `spawnTeammate` 返回的名册行。
+ * @param seat - 座位 id。
+ * @param dmId - 主持人的 session id。
+ */
+function confineMember(
+  ctx: Context,
+  member: SpawnTeammateResult['member'],
+  seat: string,
+  dmId: string,
+): void {
+  const agents = ctx.get('agents')
+  if (agents === undefined) throw new Error(`这个部署里没有 agent 注册表，${PLAYER_TOOL} 收不了口。`)
+  const agent = agents.get(member.id)
+  if (agent === undefined) {
+    throw new Error(`玩家 agent（${member.name}）不在注册表里，收窄没做成——先别让它上桌。`)
+  }
+  confine(agent, seat, dmId)
 }
 
 /** 组装工具描述：把「什么时候该调它」写在最前面，模型据此判断而非猜。 */
@@ -195,6 +297,24 @@ export function apply(ctx: Context): void {
       return Promise.resolve(snapshot(current))
     },
   }))
+  // agent/created 比 spawnTeammate 返回得早，是能在玩家开口之前动手的时机。
+  ctx.on('agent/created', ({ agent }) => {
+    // 已在座上的玩家：续命子会话每次 activation 都是一个**新的 Agent 对象**，而收窄挂在
+    // agent 的 ctx 上——所以每次都得认出来重挂一遍，否则第二个 turn 就漏了。
+    const sitting = players.find(agent.session.header.id)
+    if (sitting !== undefined) {
+      confine(agent, sitting.seat, sitting.dmId)
+      return undefined
+    }
+    // 正在上桌的那一位：agent/created 比 spawnTeammate 返回得早，这是唯一赶得上的时机。
+    const parent = agent.session.header.parentSession
+    if (parent === undefined) return undefined
+    const pending = awaiting.get(parent)
+    if (pending === undefined) return undefined
+    awaiting.delete(parent)
+    confine(agent, pending.seat, parent)
+    return undefined
+  })
   ctx.tools.register(defineTool({
     name: PLAYER_TOOL,
     description: describePlayerTool(),
@@ -248,18 +368,29 @@ export function apply(ctx: Context): void {
           if (sitting !== undefined) throw new Error(`座位 "${seat}" 上已经有人了（${sitting.name}）；先 unseat 再 spawn。`)
           const dm = exec.agent
           if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
-          const request: ContinuableStartSpec['request'] = {
-            prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook, dmId: dm.id }) }],
-            parent: dm,
-            toolFilter: { allow: PLAYER_TOOLS },
+          const teams = ctx.get('agentTeams')
+          if (teams === undefined) {
+            throw new Error(`这个部署里没有 agent-team 服务，${PLAYER_TOOL} 用不了——需要 @deepseek-ai/dsh-experimental-agent-team 与 agent-team-profile。`)
           }
-          const started = await requireSubagents(ctx).startContinuable({
-            provider: 'spawn',
-            label: `玩家 ${playerName}（${seat}）`,
-            request,
-            signal: exec.signal,
-          })
-          players.seat({ seat, name: playerName, childId: started.childId })
+          // 先把判据挂上、再建人：这样 `agent/created` 一到就认得出这是谁，收窄能赶在
+          // 它的第一个请求之前——而 spawnTeammate 返回后再收是赶不上的（实测输过）。
+          awaiting.set(dm.id, { seat, name: playerName })
+          try {
+            const spawned = await teams.spawnTeammate(dm, {
+              // 座位号 + 唯一后缀；中文角色名走 description，那才是 label。
+              name: `${seat}-${++seatSerial}`,
+              description: `玩家 ${playerName}（${seat}）`,
+              prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook, dmId: dm.id }) }],
+              context: 'fresh',
+              provider: 'spawn',
+              signal: exec.signal,
+            })
+            // 兜底：万一 agent/created 没赶上（或没触发），这里再收一次，`confine` 自己去重。
+            confineMember(ctx, spawned.member, seat, dm.id)
+            players.seat({ seat, name: playerName, childId: spawned.member.id, dmId: dm.id })
+          } finally {
+            awaiting.delete(dm.id)
+          }
           break
         }
         case 'say': {

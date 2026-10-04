@@ -18,25 +18,29 @@ import type { ContinuableStart } from '@deepseek-ai/dsh-subagent'
 /** 玩家背后的子会话 id，跨 activation 稳定。 */
 export type PlayerChildId = ContinuableStart['childId']
 
+/** 玩家唯一的对外通道：对主持人说话。 */
+export const SPEAK_TOOL = 'send_message'
+
 /**
- * 玩家能看到的全部工具。
+ * 玩家能做的全部事情。
  *
- * **用白名单而不是黑名单**：新内核会加新工具，逐个 `deny` 的清单会随时间过期，
- * 而 `allow` 只保留点名的那些，天然免疫这件事。代价是名单里的名字必须真实存在——
- * `tools.restrict()` 对未知名字直接抛错，错误信息还会列出全部已知工具名。
- * 那个失败模式正好是我们想知道的：名单里少了 `send_message`，就等于玩家没法开口。
+ * 这份名单是**两层收窄**共同的输入（`index.ts` 的 `confine`）：
  *
- * **它管不到 agent 自己 scope 里注册的工具**（2026-10-05 实测）。`restrict` 的语义是
- * 「过滤一个 scope **继承**到的东西 —— global 层与链上每一层祖先，从不包括它自己那层」
- * （`core/tools/src/index.ts` 的 `view()`）。而内核的委派工具 `subagent` 恰好是每个 agent
- * 创建时注册进它自己 scope 的（`subagent/tool-subagent/src/index.ts:665-683` 用
- * `candidate.ctx`），于是玩家实际看到两个工具，不是一个。实测证据：往这份名单里塞一个
- * 假名字，spawn 会吐回「known global tools」全表——表里有 `send_message`、有
- * `subagent_fork`（全局注册的），**没有** `subagent`。要连 own 层一起收，得用
- * `tools.guard()`（拒绝执行，与注册在哪一层无关），见
- * `docs/设计/2026-10-05-spawn_player-可行方案.md` §六。
+ * - `tools.restrict({ allow: PLAYER_TOOLS })` 管**看不看得见**。不在名单里的工具对玩家根本不
+ *   存在，模型不会去试，省掉一轮浪费。
+ * - `tools/pre-execute` 上的兜底闸管**准不准执行**。`restrict` 按定义只过滤 scope **继承**到的
+ *   东西（`view()` 的 JSDoc：`never what its OWN layer registers`），而内核的委派工具
+ *   `subagent` 正是每个 agent 创建时注册进**它自己那层**的（`tool-subagent/src/index.ts:665-683`
+ *   用 `candidate.ctx`）——那一层只有这道闸拦得住。
+ *
+ * **用白名单而不是黑名单**：新内核会加新工具，逐个 `deny` 的清单会随时间过期，而白名单只保留
+ * 点名的那些，天然免疫这件事。代价是名字必须真实存在——`restrict()` 对未知名字直接抛错，而那
+ * 个失败模式正好是我们想知道的：名单里少了 `send_message`，就等于玩家没法开口。
+ *
+ * 两层机制的实测、源码位置与那次「假名字换出可过滤工具全表」的实验见
+ * `docs/设计/2026-10-05-spawn_player-可行方案.md`。
  */
-export const PLAYER_TOOLS = ['send_message'] as const
+export const PLAYER_TOOLS = [SPEAK_TOOL] as const
 
 /** 一位已上桌的 AI 玩家。 */
 export interface PlayerHandle {
@@ -46,6 +50,8 @@ export interface PlayerHandle {
   readonly name: string
   /** 这个玩家的子会话 id，DM 用它给玩家发话。 */
   readonly childId: PlayerChildId
+  /** 主持人的 session id：收窄时要拿它当「这位玩家能对谁说话」的目标之一。 */
+  readonly dmId: string
 }
 
 /** 拼上台说明需要的输入。 */
@@ -93,6 +99,15 @@ export interface PlayerRegistry {
    */
   get(seat: string): PlayerHandle | undefined
   /**
+   * 按子会话 id 找玩家。
+   *
+   * **这条是给 `agent/created` 用的**：续命子会话每次 activation 都会是一个**新的 Agent
+   * 对象**，而收窄挂在 agent 的 ctx 上——所以每次都得认出来再收一遍，靠座位表认不出来。
+   * @param childId - 那个玩家的子会话 id。
+   * @returns 对应的句柄；不在座上时为 `undefined`。
+   */
+  find(childId: string): PlayerHandle | undefined
+  /**
    * 请一位玩家下桌。
    * @param seat - 座位 id。
    * @returns 原来在位子上为 `true`，本来就空着为 `false`。
@@ -124,6 +139,12 @@ export function createRegistry(): PlayerRegistry {
     },
     get(seat) {
       return bySeat.get(seat)
+    },
+    find(childId) {
+      for (const handle of bySeat.values()) {
+        if (handle.childId === childId) return handle
+      }
+      return undefined
     },
     unseat(seat) {
       return bySeat.delete(seat)

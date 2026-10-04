@@ -131,3 +131,19 @@ export function revealClues(state: GameState, ids: readonly string[]): GameState
 export function isFinished(state: GameState): boolean {
   return state.phase === 'reveal'
 }
+
+/**
+ * 是不是还在**封存期**——带答案的东西一件都不交出去。
+ *
+ * 与 `isFinished` 是同一件事的两面：**复盘就是解封**。给它一个独立的名字，是因为调用点
+ * 问的是「现在能不能给」（真相保险箱），不是「这局跑完了没有」；两者哪天分开了，
+ * 只有一个地方要改。
+ *
+ * **没开局也算封存期**：这条判据按"默认不给"写。没开局却要真相，只可能是取错了本子，
+ * 让它失败比让它通过有用。
+ * @param state - 当前局面；还没开局时给 `undefined`。
+ * @returns 复盘之前一律 `true`。
+ */
+export function isSealed(state: GameState | undefined): boolean {
+  return state === undefined || !isFinished(state)
+}

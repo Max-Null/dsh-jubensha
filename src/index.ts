@@ -19,9 +19,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SpawnTeammateResult } from '@deepseek-ai/dsh-experimental-agent-team'
 import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { loadCase, roleBook } from './case.ts'
+import { bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
-import { advance, createGame, isFinished, revealClues } from './state.ts'
+import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
 
 /** 插件名。 */
@@ -60,6 +60,65 @@ const CASE_FILE = 'case.yml'
  * 登记表不能——里面的子会话 id 在进程结束后没有任何意义。
  */
 const players = createRegistry()
+
+/**
+ * 封存的角色本：ref → 全文。
+ *
+ * **为什么要有它**：角色本是这一局最不该被看见的东西——每位玩家要瞒的事全在里面。而它
+ * 进玩家手里之前必须经过 DM 的手，于是全文就落在 DM 的上下文里；玩家的界面能看到思考块
+ * 与工具操作条（`docs/设计/2026-10-04-单机剧本杀-设计方案.md` §3.2 风险一），**展开就看见**。
+ *
+ * 所以改成过手不过目：`jubensha_case action="book"` 在复盘之前只返回一个 ref，
+ * 全文留在这里；`jubensha_player` 收 ref 自己解开。DM 从头到尾没读到过。
+ * 副作用是好的——它顺带堵死了"DM 自己转述角色本时抄漏一句"（那条路以前只靠描述里的警告）。
+ */
+const sealedBooks = new Map<string, string>()
+
+/**
+ * 把 `roleBook` 入参解成正文——它可能是一个封存引用，也可能是全文。
+ *
+ * 两种都收，因为两条路都有正当用法：上桌走引用（正文不过 DM 的手），复盘或临时补位时
+ * 直接给全文更省事。认出引用就按引用走，认不出就当作全文。
+ *
+ * **引用要对着座位核一遍**：引用是当场按座位生成的，而 `spawn` 也自带一个座位号。
+ * 两者不一致就是"把别人的本子发给了这个人"——角色本串位是信息隔离破得最彻底的一种，
+ * 所以这一条按 `spawn` 的参数能查出来的事实来查，不靠 DM 记得住。
+ * @param raw - 调用方给的 `roleBook`。
+ * @param seat - 这次 `spawn` 的座位 id；只有引用用得上它。
+ * @returns 要发给玩家的角色本正文。
+ */
+function resolveBook(raw: string, seat: string): string {
+  const ref = pickBookRef(raw, sealedBooks)
+  if (ref === undefined) return raw
+  const bound = bookRefSeat(ref)
+  if (bound !== undefined && bound !== seat) {
+    throw new Error(`这份角色本是座位 "${bound}" 的，不能发给 "${seat}"——`
+      + `每个座位只能拿到自己那一份。重新取一份 ${seat} 的。`)
+  }
+  // 走到这里 ref 一定来自登记表，取不到只可能是并发下被清掉——按最坏情况处理，别把空交出去。
+  return sealedBooks.get(ref) ?? raw
+}
+
+/**
+ * 现在还在不在封存期——判据本身在 `state.ts` 的 `isSealed`，这里只是把它接到这一局上。
+ * @returns 复盘阶段之前一律 `true`。
+ */
+function sealed(): boolean {
+  return isSealed(current)
+}
+
+/** 复盘之前拒答时给的出路；把「现在该用什么」直接写进去，而不是只说不行。 */
+function sealNote(section: string): string {
+  if (section === 'truth') {
+    return '这一局还封着——真相里写着谁是真凶。带局要用的东西不在真相里：'
+      + '流程看 briefing，线索进牌桌走 action="clue"，玩家推得对不对看线索的 supports。'
+  }
+  if (section === 'clues') {
+    return '整段 clues 里带着 supports（"这条能推出什么"），所以整段封着——它只给 DM 判断用。'
+      + '要把线索送到桌上，用 action="clue"，它只给原文。'
+  }
+  return '这一段的答案要等复盘（phase 走到 reveal）。'
+}
 
 /** 桌上现在有谁，一句人话；错误信息与调用结果都用它。 */
 function tableText(): string {
@@ -205,14 +264,19 @@ function describePlayerTool(): string {
 
 /** 组装本子工具的描述：同样把「什么时候该调它」写在最前面。 */
 function describeCaseTool(): string {
-  return 'Read a 剧本杀 case file kept as data: which seats it has, one role\'s own brief, or one whole '
-    + 'section (the truth, the clues, the briefing script, the review questions). Call action="load" first '
-    + '— it also reports the format problems it finds, and that check is the reason cases are data instead '
-    + 'of prose. Use action="book" to get one role\'s brief verbatim and hand it to jubensha_player as its '
-    + 'roleBook: never retype it, and never hand a player another seat\'s brief. '
-    + '剧本杀本子工具：看这本有哪几个座位 / 取某个角色的角色本 / 取本子的某一段（真相、线索、带局脚本…）。'
-    + '先调 load，它会顺带报出格式问题——把本子做成数据就是为了这一步。'
-    + '给玩家上桌时用 book 取「原样」的角色本交给 jubensha_player，不要自己转述，更不要把别的座位的发给他。'
+  return 'Read a 剧本杀 case file kept as data: which seats it has, one role\'s own brief, the clues as the '
+    + 'table sees them, or one whole section (the scene, the briefing script, the review questions). Call '
+    + 'action="load" first — it also reports the format problems it finds, and that check is the reason cases '
+    + 'are data instead of prose. Use action="book" to get one role\'s brief: before the review it returns a '
+    + 'sealed ref instead of the text, so hand that ref to jubensha_player as its roleBook verbatim — the '
+    + 'brief never passes through your context, and a player can never be handed another seat\'s brief by '
+    + 'mistake. Use action="clue" to put clues on the table: it returns only what the players get to read, '
+    + 'never the "what it means" part. Sections holding the answer stay sealed until the review. '
+    + '剧本杀本子工具：看这本有哪几个座位 / 取某个角色的角色本 / 取线索的牌桌原文 / 取本子的某一段'
+    + '（场景、带局脚本、复盘脚本…）。先调 load，它会顺带报出格式问题——把本子做成数据就是为了这一步。'
+    + '上桌时用 book 取角色本、把返回值（复盘前是一个封存 ref）**原样**填进 jubensha_player 的 roleBook，'
+    + '不要自己转述，更不要把别的座位的发给他。线索送到桌上用 clue，它只给玩家要读的原文。'
+    + '带答案的段（真相、整段线索）封到复盘，取不到是设计如此，报错里会说你该用什么。'
 }
 
 /**
@@ -348,15 +412,20 @@ export function apply(ctx: Context): void {
     parameters: {
       action: {
         type: 'string',
-        enum: ['load', 'section', 'book'],
-        description: 'load = 加载并校验（默认）；section = 取某一段原文；book = 取某个角色的角色本。',
+        enum: ['load', 'section', 'book', 'clue'],
+        description: 'load = 加载并校验（默认）；section = 取某一段原文；book = 取某个角色的角色本；clue = 取线索的牌桌原文。',
       },
       dir: { type: 'string', description: '本子目录（读其中的 case.yml），或者直接给那份文件的路径。' },
       section: {
         type: 'string',
-        description: 'section 用：段名，如 scene / truth / clues / emotional / briefing / style / audit / reveal。',
+        description: 'section 用：段名，如 scene / truth / clues / emotional / briefing / style / audit / reveal。复盘之前带答案的段取不到，报错里会说该用什么代替。',
       },
       role: { type: 'string', description: 'book 用：座位 id，如 "p1"。' },
+      clues: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'clue 用：要取哪几条线索（id）；不填表示全部。',
+      },
     },
     output: {
       schema: {
@@ -380,6 +449,9 @@ export function apply(ctx: Context): void {
           },
           sections: { type: 'array', items: { type: 'string' } },
           text: { type: 'string' },
+          ref: { type: 'string' },
+          sealed: { type: 'boolean' },
+          missing: { type: 'array', items: { type: 'string' } },
           issues: {
             type: 'array',
             items: {
@@ -394,9 +466,21 @@ export function apply(ctx: Context): void {
         },
       },
       render: (args, value) => {
-        // load 的结果是给 DM 看的一张表；section / book 取的是原文，原样交出去——
+        // load 的结果是给 DM 看的一张表；section / clue / book 取的是原文，原样交出去——
         // 角色本尤其不能在这里被重新排版，它要一字不差地到玩家手上。
-        if ((args.action ?? 'load') !== 'load') return [{ type: 'text', text: value.text ?? '' }]
+        if (value.sealed === true) {
+          return [{
+            type: 'text',
+            text: `${value.text ?? ''}\n\n角色本全文已封存，不经过你的上下文。`
+              + `上桌时 ${PLAYER_TOOL} 的 roleBook 只填下面这一串——只填这一串：\n`
+              + `${value.ref ?? ''}`,
+          }]
+        }
+        if ((args.action ?? 'load') !== 'load') {
+          const missing = value.missing ?? []
+          const note = missing.length > 0 ? `\n\n（这本里没有这些线索：${missing.join('、')}）` : ''
+          return [{ type: 'text', text: `${value.text ?? ''}${note}` }]
+        }
         const lines = [`《${value.title ?? ''}》（case ${value.caseId ?? ''}｜${value.genre ?? ''}）`]
         for (const seat of value.seats ?? []) lines.push(`  ${seat.id}  ${seat.name}（${seat.player}）`)
         lines.push(`  可取的段：${(value.sections ?? []).join('、')}`)
@@ -436,8 +520,28 @@ export function apply(ctx: Context): void {
         if (value === undefined) {
           throw new Error(`这本里没有 "${name}" 这一段。有这些：${Object.keys(loaded.sections).join('、')}`)
         }
+        // 白名单之外的一律封到复盘。这一段是"真相保险箱"的全部实现——它不靠 DM 自觉
+        // 不去看，而是**看不到**：没读过的东西，连展开操作条也翻不出来。
+        if (sealed() && !openBeforeReveal(name)) {
+          throw new Error(`"${name}" 取不到。${sealNote(name)}`)
+        }
         const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
         return Promise.resolve({ caseId: loaded.id, text, issues })
+      }
+      if (action === 'clue') {
+        // 空 clues 有两种：段落不在（情感本，本就不该有搜证），和段落空（本子没写完）。
+        // 两者都不该让 DM 拿到一个空字符串去猜——那看起来像工具坏了。
+        const raw = loaded.sections['clues']
+        if (!Array.isArray(raw) || raw.length === 0) {
+          throw new Error(`这本（${loaded.genre}）没有搜证段——它不是靠线索推进的。`
+            + `带局要看的是 briefing 段。`)
+        }
+        const { clues, missing } = tableClues(loaded, args.clues ?? [])
+        // 拼成能直接贴到桌上的样子：DM 拿到手不用再排版，也就不会顺手把 supports 也带上。
+        const text = clues
+          .map(clue => `【线索 ${clue.id}${clue.title === '' ? '' : ` · ${clue.title}`}】\n${clue.text}`)
+          .join('\n\n')
+        return Promise.resolve({ caseId: loaded.id, text, missing, issues })
       }
       const seat = args.role
       if (seat === undefined) throw new Error('book 要给座位 id。')
@@ -445,7 +549,13 @@ export function apply(ctx: Context): void {
       if (role === undefined) {
         throw new Error(`这本里没有座位 "${seat}"。有这些：${loaded.roles.map(item => item.id).join('、')}`)
       }
-      return Promise.resolve({ caseId: loaded.id, text: roleBook(role), issues })
+      const full = roleBook(role)
+      if (sealed()) {
+        const ref = bookRef(loaded.id, seat)
+        sealedBooks.set(ref, full)
+        return Promise.resolve({ caseId: loaded.id, text: bookPreview(role), ref, sealed: true, issues })
+      }
+      return Promise.resolve({ caseId: loaded.id, text: full, issues })
     },
   }))
   ctx.tools.register(defineTool({
@@ -461,7 +571,7 @@ export function apply(ctx: Context): void {
       name: { type: 'string', description: 'spawn 用：角色名。' },
       roleBook: {
         type: 'string',
-        description: 'spawn 用：这个角色的角色本正文。他要守的秘密全在这里，只发给这一个玩家。',
+        description: 'spawn 用：这个角色的角色本。复盘前 jubensha_case action="book" 给的是一个引用，把它（单独那一串）填进来即可——程序自己解开，正文不经过你的上下文；复盘后也可以直接给全文。只发给这一个玩家，绝不转述、绝不换座位。',
       },
       message: { type: 'string', description: 'say 用：要对这位玩家说的话——提问、转述，或阶段提示。' },
     },
@@ -495,6 +605,7 @@ export function apply(ctx: Context): void {
           if (seat === undefined || playerName === undefined || roleBook === undefined) {
             throw new Error('spawn 需要 seat / name / roleBook 三项都给。')
           }
+          const book = resolveBook(roleBook, seat)
           // 先问座位空不空，再建子会话。反过来的话，座位被占时那个刚建好的子会话就没人管了
           // ——登记表自己也拦这一手，但那时已经晚了。
           const sitting = players.get(seat)
@@ -513,7 +624,7 @@ export function apply(ctx: Context): void {
               // 座位号 + 自带唯一性的后缀；中文角色名走 description，那才是 label。
               name: teammateName(seat),
               description: `玩家 ${playerName}（${seat}）`,
-              prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook, dmId: dm.id }) }],
+              prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook: book, dmId: dm.id }) }],
               context: 'fresh',
               provider: 'spawn',
               signal: exec.signal,

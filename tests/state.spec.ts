@@ -10,7 +10,7 @@
  * （给玩家的永远是**原始资料**，不是带解读的资料）。
  */
 import { describe, expect, it } from 'vitest'
-import { advance, createGame, isFinished, revealClues } from '../src/state.ts'
+import { advance, createGame, isFinished, isSealed, revealClues } from '../src/state.ts'
 import type { GameState } from '../src/state.ts'
 
 /** 一局 01 拾光照相馆的开局输入——位子取自该本真实的四个角色。 */
@@ -111,5 +111,29 @@ describe('线索', () => {
     expect(entry?.kind).toBe('clue-revealed')
     expect(entry?.detail).toBe('c1')
     expect(entry?.phase).toBe('search')
+  })
+})
+
+describe('封存期', () => {
+  it('一路封到复盘为止，最后一步才开', () => {
+    let state = opening()
+    expect(isSealed(state)).toBe(true)
+    for (let i = 0; i < 3; i += 1) {
+      state = advance(state)
+      expect(isSealed(state)).toBe(true)
+    }
+    expect(isSealed(advance(state))).toBe(false)
+  })
+
+  it('与 isFinished 恰好互为反面——复盘就是解封', () => {
+    let state = opening()
+    for (let i = 0; i < 5; i += 1) {
+      expect(isSealed(state)).toBe(!isFinished(state))
+      state = advance(state)
+    }
+  })
+
+  it('没开局也算封着——取错了本子时，失败比通过有用', () => {
+    expect(isSealed(undefined)).toBe(true)
   })
 })

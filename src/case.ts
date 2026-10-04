@@ -112,6 +112,134 @@ function readRole(raw: unknown, index: number): RoleEntry {
 }
 
 /**
+ * 复盘之前可以随时取用的段落。
+ *
+ * **这是白名单，不是黑名单**：不在里面的段落，`phase` 走到 `reveal` 之前一律拒答。
+ * 用白名单是因为漏的代价不对称——漏掉一段该开的，DM 当场就知道（取不到，报错里
+ * 还列着段名）；而漏掉一段该锁的，是**玩家的操作条里静静躺着一份真相**，
+ * 谁也不会发现，直到有人展开它。以后往 schema 加段落时，默认落在安全的那一侧。
+ */
+export const OPEN_BEFORE_REVEAL: readonly string[] = [
+  'meta',            // 编号与人数，开场就要念
+  'scene',           // 公开场景，本来就要给全员
+  'briefing',        // 带局脚本——DM 靠它控场
+  'style',           // 口吻素材，给 AI 玩家的味道
+  'phases',          // 流程骨架
+  'audit',           // 监察职责，逐局不同
+  'world_facts',     // 玩家的环境常识
+  'liberty_to_slip', // 破绽许可
+]
+
+/** 一段在复盘之前能不能取。 */
+export function openBeforeReveal(section: string): boolean {
+  return OPEN_BEFORE_REVEAL.includes(section)
+}
+
+/** 一条线索在**牌桌上**的样子：只有原文，没有 `supports`。 */
+export interface TableClue {
+  /** 线索 id，与 `jubensha_state` 的 `revealedClues` 同一套命名。 */
+  readonly id: string
+  /** 线索标题。 */
+  readonly title: string
+  /** 呈现给玩家的原文。 */
+  readonly text: string
+}
+
+/**
+ * 取线索的**牌桌原文**，丢掉 `supports`。
+ *
+ * 这是线索进牌桌的唯一出口。分开的理由在 schema 里写着：`text` 是"现场留下了什么"，
+ * `supports` 是"这意味着什么"——后者只给 DM 判断用。两者若从同一个口子出去，
+ * 迟早有一次会被整段贴到桌上，而**连"那条没有配对的进"都替玩家讲了，线索就只剩盖章**。
+ * @param loaded - 加载好的本子。
+ * @param ids - 要取的线索 id；给空数组表示全部。
+ * @returns 牌桌可用的线索，以及在本子里找不到的 id。
+ */
+export function tableClues(
+  loaded: LoadedCase,
+  ids: readonly string[],
+): { clues: TableClue[]; missing: string[] } {
+  const raw = loaded.sections['clues']
+  const entries = Array.isArray(raw) ? raw : []
+  const all: TableClue[] = entries.map((item, index) => {
+    const entry = record(item)
+    return {
+      id: text(entry['id']) || `c${index + 1}`,
+      title: text(entry['title']),
+      text: text(entry['text']),
+    }
+  })
+  if (ids.length === 0) return { clues: all, missing: [] }
+  const wanted = new Set(ids)
+  const clues = all.filter(clue => wanted.has(clue.id))
+  const found = new Set(clues.map(clue => clue.id))
+  return { clues, missing: ids.filter(id => !found.has(id)) }
+}
+
+/** ref 的前缀。`roleBook` 靠它分辨手里那串是引用还是正文。 */
+export const BOOK_REF_PREFIX = 'book:'
+
+/**
+ * 一个座位的角色本封存引用。
+ *
+ * 带上本子编号，跨局不会串。**引用本身就是"这一份属于谁"的凭据**——`spawn` 时拿它和
+ * 座位号核一遍，就能挡住"把 p2 的本子发给了 p1"。
+ * @param caseId - 本子编号。
+ * @param seat - 座位 id。
+ * @returns 形如 `book:p1@03` 的引用。
+ */
+export function bookRef(caseId: string, seat: string): string {
+  return `${BOOK_REF_PREFIX}${seat}@${caseId}`
+}
+
+/**
+ * 从一个引用里读回座位号。
+ *
+ * 与 `bookRef` 是一对，**改动其中一边必须同时改另一边**——所以这里的用例是往返一致性，
+ * 而不是某个写死的字符串。
+ * @param ref - 待解析的引用。
+ * @returns 座位 id；不是本插件发的引用时给 `undefined`。
+ */
+export function bookRefSeat(ref: string): string | undefined {
+  if (!ref.startsWith(BOOK_REF_PREFIX)) return undefined
+  const seat = ref.slice(BOOK_REF_PREFIX.length).split('@')[0]
+  return seat === undefined || seat === '' ? undefined : seat
+}
+
+/**
+ * 在一段文本里认出一个引用。
+ *
+ * **只认已知的那几个**（`known` 是登记表）——所以正文里偶然出现 `book:` 字样不会被误认，
+ * 这让它可以比正则宽松得多：整串相等算，**整段文本里含有**也算。
+ *
+ * 需要"含有"这一档是实测逼出来的（2026-10-05）：`book` 的返回值里既有一行摘要、又有一句
+ * "roleBook 只填这一串"，而 DM 把**整段**填了进去。只认"整串相等"会让这种最自然的用法
+ * 静默失败——玩家拿不到角色本，照样能说话，从外面看不出来。
+ * @param text - 调用方填进 `roleBook` 的东西。
+ * @param known - 本进程发出去的引用们。
+ * @returns 认出来的引用；认不出时 `undefined`（调用方据此当作全文）。
+ */
+export function pickBookRef(text: string, known: ReadonlyMap<string, string>): string | undefined {
+  if (known.has(text)) return text
+  for (const ref of known.keys()) {
+    if (text.includes(ref)) return ref
+  }
+  return undefined
+}
+
+/**
+ * 封存期内给 DM 看的一行摘要。
+ *
+ * 它只取 `public :` 与角色名——**开场就要念给所有人听的**那两样。所以它不泄漏任何东西，
+ * 却足以让 DM 确认手里那个 ref 指向的确实是这个位子的本子。
+ * @param role - 一个角色的资料。
+ * @returns 摘要文本。
+ */
+export function bookPreview(role: RoleEntry): string {
+  return `你是「${role.name}」。${role.publicIdentity}`
+}
+
+/**
  * 把加载好的本子拼成能直接发给玩家的角色本。
  *
  * **不含 `culprit`**：那是真相，属于 DM 与监察。这一条是硬的——角色本里出现

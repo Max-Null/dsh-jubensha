@@ -9,7 +9,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CaseFormatError, loadCase, roleBook } from '../src/case.ts'
+import { CaseFormatError, bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, tableClues } from '../src/case.ts'
 
 /** 一份真实本子的 YAML 版——`tests/fixtures/case-03.yml` 的文件头写了它为什么存在。 */
 function fixture(): string {
@@ -139,5 +139,130 @@ describe('结构与判据', () => {
   it('推理本没有线索只是提醒：本子能跑，但玩家没得推', () => {
     const loaded = loadCase(minimal().replace(/clues:[\s\S]*$/, ''))
     expect(loaded.issues.some(issue => issue.level === 'warn' && issue.message.includes('clues'))).toBe(true)
+  })
+})
+
+describe('封存：哪些段在复盘之前拿不到', () => {
+  it('带答案的段一律封着', () => {
+    expect(openBeforeReveal('truth')).toBe(false)
+    expect(openBeforeReveal('clues')).toBe(false)
+    expect(openBeforeReveal('emotional')).toBe(false)
+    expect(openBeforeReveal('reveal')).toBe(false)
+  })
+
+  it('带局要用的段照常给', () => {
+    expect(openBeforeReveal('scene')).toBe(true)
+    expect(openBeforeReveal('briefing')).toBe(true)
+    expect(openBeforeReveal('audit')).toBe(true)
+  })
+
+  it('没见过的段名按封着算——白名单的意义就在这里', () => {
+    expect(openBeforeReveal('某个还没发明出来的段')).toBe(false)
+  })
+})
+
+describe('角色本引用', () => {
+  it('生成与解析是一对：往返回来还是原来那个座位', () => {
+    // 写死字符串的用例挡不住"改了格式忘了改解析"，往返一致性挡得住。
+    for (const seat of ['p0', 'p1', 'p2', 'p3']) {
+      expect(bookRefSeat(bookRef('03', seat))).toBe(seat)
+    }
+  })
+
+  it('不同座位解析出不同座位——这条是「不许串位」的前提', () => {
+    const seats = ['p0', 'p1', 'p2', 'p3'].map(seat => bookRefSeat(bookRef('03', seat)))
+    expect(new Set(seats).size).toBe(4)
+  })
+
+  it('引用里带着本子编号', () => {
+    expect(bookRef('03', 'p1')).toContain('03')
+    expect(bookRef('03', 'p1')).not.toBe(bookRef('01', 'p1'))
+  })
+
+  it('不是引用的串解析出 undefined——正文与引用靠这个分', () => {
+    expect(bookRefSeat('你是「林小满」。')).toBeUndefined()
+    expect(bookRefSeat('book:')).toBeUndefined()
+  })
+})
+
+describe('从入参里认出引用', () => {
+  /** 一局的登记表：p1 与 p2 各一份。 */
+  function known(): Map<string, string> {
+    return new Map([
+      [bookRef('03', 'p1'), 'p1 的角色本'],
+      [bookRef('03', 'p2'), 'p2 的角色本'],
+    ])
+  }
+
+  it('整串就是一个引用', () => {
+    expect(pickBookRef(bookRef('03', 'p1'), known())).toBe(bookRef('03', 'p1'))
+  })
+
+  it('整段文本里含有引用也认得——DM 实际就是这么填的', () => {
+    // 2026-10-05 实测：book 的返回值里有摘要、有说明，DM 把**整段**填进了 roleBook。
+    // 只认"整串相等"会让这一局静默地发不出版角色本，而玩家照样能说话，看不出来。
+    const filled = '你是「林小满」。陈默的高中同学。\n\n'
+      + '角色本全文已封存，不经过你的上下文。上桌时 roleBook 只填下面这一串——只填这一串：\n'
+      + bookRef('03', 'p1')
+    expect(pickBookRef(filled, known())).toBe(bookRef('03', 'p1'))
+  })
+
+  it('认的是本局发出去的那几个，不是字样——正文里出现 book: 也不会误认', () => {
+    expect(pickBookRef('他写了 book:xxx@99 这几个字', known())).toBeUndefined()
+  })
+
+  it('纯正文原样当作全文', () => {
+    expect(pickBookRef('你是「林小满」。', known())).toBeUndefined()
+    expect(pickBookRef('', known())).toBeUndefined()
+  })
+})
+
+describe('线索进牌桌', () => {
+  it('只给玩家要读的原文，supports 一个字都不带', () => {
+    const loaded = loadCase(minimal())
+    const { clues } = tableClues(loaded, [])
+    expect(clues).toHaveLength(1)
+    expect(clues[0]?.text).toBe('柜台上有只倒了的杯子')
+    expect(clues[0]?.title).toBe('一只杯子')
+    // 判据写成"结果里不许出现 supports"，而不是"结果里有 text"——
+    // 前者能抓住"哪天有人给 TableClue 加了个字段"这种回归，后者抓不住。
+    expect(JSON.stringify(clues)).not.toContain('有人碰过柜台')
+  })
+
+  it('没写 supports 也不影响取', () => {
+    const loaded = loadCase(minimal().replace('    supports: 有人碰过柜台\n', ''))
+    expect(tableClues(loaded, []).clues[0]?.text).toBe('柜台上有只倒了的杯子')
+  })
+
+  it('按 id 挑，挑不到的把 id 原样报回来', () => {
+    const loaded = loadCase(minimal())
+    const { clues, missing } = tableClues(loaded, ['c9'])
+    expect(clues).toEqual([])
+    expect(missing).toEqual(['c9'])
+  })
+
+  it('本子里没有 clues 段时给空，不抛——情感本本来就没有搜证', () => {
+    const loaded = loadCase(minimal().replace(/clues:[\s\S]*$/, ''))
+    expect(tableClues(loaded, []).clues).toEqual([])
+  })
+
+  it('情感本没有 clues 段——不是缺陷，schema 里明说了「那些段留空即可」', () => {
+    // 这条原先写成 "真本子的线索也过得了这道口"，跑出来是 0 条——**是我的假设错了，不是代码错了**。
+    // 留着它，因为"情感本没有搜证"这件事正是下面这条 action="clue" 会遇到的真实输入。
+    const loaded = loadCase(fixture())
+    expect(loaded.genre).toBe('drama')
+    expect(tableClues(loaded, []).clues).toEqual([])
+  })
+})
+
+describe('角色本封存期给 DM 看的那一行', () => {
+  it('只有开场就要念的东西，秘密一个字都不露', () => {
+    const loaded = loadCase(fixture())
+    const role = loaded.roles.find(candidate => candidate.id === 'p0')!
+    const preview = bookPreview(role)
+    expect(preview).toContain(role.name)
+    expect(preview).toContain(role.publicIdentity)
+    expect(preview).not.toContain(role.privateHistory.slice(0, 12))
+    expect(preview).not.toContain(role.secret.slice(0, 12))
   })
 })

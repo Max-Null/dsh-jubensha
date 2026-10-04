@@ -39,6 +39,7 @@ import { avatarSvg } from '../avatar.ts'
 // 形状从 `room-types.ts` 取，不是从 `room.ts` 取：后者 import 了 cordis，而本文件要过
 // 打包的纯度门（它拒掉 `@deepseek-ai/*` 的任何导入，类型导入也不例外）。
 import type { RoomSnapshot } from '../room-types.ts'
+import { openingInstruction } from '../instruction.ts'
 import { createRoomStore } from './store.ts'
 import { en, zh } from './locales.ts'
 
@@ -107,6 +108,11 @@ export function RoomPanel({ useStore, actions, t }: PropsRuntime<'shell.overlay'
   const open = useStore(state => state.open)
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
+  // 排座是**组件内部的状态**：只有这个面板知道，也不跨挂载存活，所以不进 store
+  // （store 里那份是"开着没有"——那是两个槽要共享的）。
+  const [chosen, setChosen] = useState<string | null>(null)
+  const [cast, setCast] = useState<Record<string, string>>({})
+  const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!open) return undefined
     let cancelled = false
@@ -133,6 +139,27 @@ export function RoomPanel({ useStore, actions, t }: PropsRuntime<'shell.overlay'
   const actors = snapshot?.actors ?? []
   const players = snapshot?.players ?? []
   const cases = snapshot?.cases ?? []
+  const chosenEntry = cases.find(one => one.id === chosen) ?? null
+  // 只把**已经挑了演员**的位子写进指令：给一个空着的位子编个名字写进去，主持人会以为那真是
+  // 某人——而他照着做的时候才发现没有这个人。
+  const assignment = chosenEntry === null ? [] : chosenEntry.roles
+    .filter(role => role.player === 'ai')
+    .flatMap((role) => {
+      const actor = actors.find(one => one.id === cast[`${chosenEntry.id}:${role.id}`])
+      return actor === undefined
+        ? []
+        : [{ seat: role.id, roleName: role.name, actorId: actor.id, actorName: actor.name }]
+    })
+  const copyInstruction = async (): Promise<void> => {
+    if (chosenEntry === null) return
+    try {
+      await navigator.clipboard.writeText(openingInstruction(chosenEntry, assignment))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch (cause: unknown) {
+      setProblem(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
   return <div style={panelStyle} role="dialog" aria-label={t('room.title')}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
       <strong>{t('room.title')}</strong>
@@ -174,11 +201,72 @@ export function RoomPanel({ useStore, actions, t }: PropsRuntime<'shell.overlay'
       {cases.length === 0
         ? <p style={{ margin: '2px 0 0', opacity: 0.8 }}>{t('room.noCases')}</p>
         : cases.map(entry => <div key={entry.id} style={{ marginBottom: '6px' }}>
-          <div>{entry.title}（case {entry.id}｜{entry.genre}）</div>
+          <label style={{ display: 'flex', gap: '6px', alignItems: 'baseline', cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="jubensha-case"
+              checked={chosen === entry.id}
+              onChange={() => { setChosen(entry.id); setCopied(false) }}
+            />
+            <span>{entry.title}（case {entry.id}｜{entry.genre}）</span>
+          </label>
           {/* 位子与角色名是排座的依据：要几个 AI 玩家、谁演谁，看这一行。 */}
-          <div style={{ opacity: 0.65, fontSize: '12px' }}>
+          <div style={{ opacity: 0.65, fontSize: '12px', marginLeft: '20px' }}>
             {entry.roles.map(role => `${role.id} ${role.name}`).join(' · ')}
           </div>
+          {chosen === entry.id
+            ? <div style={{ marginLeft: '20px', marginTop: '5px' }}>
+              {entry.roles.filter(role => role.player === 'ai').map(role => <div
+                key={role.id}
+                style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '3px' }}
+              >
+                <span style={{ opacity: 0.6, width: '24px' }}>{role.id}</span>
+                <span style={{ flex: 1 }}>{role.name}</span>
+                <select
+                  aria-label={`${role.id} ${role.name}`}
+                  value={cast[`${entry.id}:${role.id}`] ?? ''}
+                  onChange={(event) => {
+                    setCast({ ...cast, [`${entry.id}:${role.id}`]: event.target.value })
+                    setCopied(false)
+                  }}
+                >
+                  <option value="">{t('room.pickActor')}</option>
+                  {actors.map(actor => <option
+                    key={actor.id}
+                    value={actor.id}
+                    // 一个演员同一局只能坐一个位子——同一个人演三个角色在物理上就不可能。
+                    // 别的位子已经选了他，这里就禁掉，而不是等人排完再把这条指令发出去。
+                    disabled={Object.entries(cast).some(([key, value]) =>
+                      value === actor.id && key !== `${entry.id}:${role.id}`)}
+                  >{actor.name}</option>)}
+                </select>
+              </div>)}
+              <button
+                type="button"
+                onClick={() => void copyInstruction()}
+                style={{
+                  marginTop: '4px', padding: '3px 10px', borderRadius: '8px',
+                  border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+                  background: 'transparent', color: 'inherit', font: 'inherit',
+                  fontSize: '12px', cursor: 'pointer',
+                }}
+              >{copied ? t('room.copied') : t('room.copy')}</button>
+              {/* 指令也显示出来：用户可能只想看，或者只抄其中一段——剪贴板是顺手，不是唯一出口。 */}
+              {assignment.length > 0
+                ? <pre style={{
+                  margin: '6px 0 0',
+                  padding: '6px 8px',
+                  maxHeight: '150px',
+                  overflow: 'auto',
+                  background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.10))',
+                  borderRadius: '8px',
+                  fontSize: '11px',
+                  lineHeight: 1.5,
+                  whiteSpace: 'pre-wrap',
+                }}>{openingInstruction(entry, assignment)}</pre>
+                : null}
+            </div>
+            : null}
         </div>)}
     </div>
 

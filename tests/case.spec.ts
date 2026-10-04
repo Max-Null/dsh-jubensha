@@ -16,6 +16,16 @@ function fixture(): string {
   return readFileSync(new URL('./fixtures/case-03.yml', import.meta.url), 'utf8')
 }
 
+/**
+ * 第二份真实本子：推理本 case-02。
+ *
+ * 与 case-03 分工不同——那份是情感本，`truth.culprit` / `clues[*].supports` / `timeline`
+ * 这些**推理本专属**的段在它里面全是空的。这一份把它们都填满。
+ */
+function fixture02(): string {
+  return readFileSync(new URL('./fixtures/case-02.yml', import.meta.url), 'utf8')
+}
+
 /** 一份最小的可用推理本，用来单独试某一条校验。 */
 function minimal(overrides: string = ''): string {
   return `
@@ -71,6 +81,51 @@ describe('加载一份真实本子', () => {
     const loaded = loadCase(fixture())
     expect(loaded.sections['reveal']).toBeDefined()
     expect(loaded.sections['briefing']).toBeDefined()
+  })
+})
+
+describe('加载一份真实的推理本', () => {
+  it('读出编号、名字与类型', () => {
+    const loaded = loadCase(fixture02())
+    expect(loaded.id).toBe('02')
+    expect(loaded.title).toBe('深夜电台')
+    expect(loaded.genre).toBe('deduction')
+  })
+
+  it('一条问题都挑不出来——推理本这一侧同样成立', () => {
+    // case-03 证明了 schema 装得下情感本。这条是它的另一半：`truth.culprit`、
+    // `clues[*].supports`、`truth.timeline`、`truth.misdecisions` 这些只在推理本里
+    // 有内容的段，也一条不差地装得下。
+    expect(loadCase(fixture02()).issues).toEqual([])
+  })
+
+  it('真凶由 truth.culprit 一处说了算，派到角色上', () => {
+    const loaded = loadCase(fixture02())
+    const culprits = loaded.roles.filter(role => role.culprit).map(role => role.id)
+    expect(culprits).toEqual(['p3'])
+  })
+
+  it('凶手那份角色本里没有凶手标记——它出现这一局就完了', () => {
+    const culprit = loadCase(fixture02()).roles.find(role => role.culprit)!
+    expect(roleBook(culprit)).not.toContain('凶手')
+    expect(roleBook(culprit)).toContain('苏雨')
+  })
+
+  it('三条线索都在，而且 supports 是给 DM 的那一半', () => {
+    const loaded = loadCase(fixture02())
+    const { clues } = tableClues(loaded, [])
+    expect(clues.map(clue => clue.id)).toEqual(['c1', 'c2', 'c3'])
+    // 破局点到这一步就该断在这里：`supports` 里写了「最后那条 22:41 出没人认领」，
+    // 而牌桌上只该有那六条时间。玩家自己看出没人认领，才是他要做的活。
+    const supports = JSON.stringify(loaded.sections['clues'])
+    expect(supports).toContain('没人认领')
+    expect(JSON.stringify(clues)).not.toContain('没人认领')
+  })
+
+  it('真值时间线逐段都在，谁在哪一段是明写的', () => {
+    const timeline = loadCase(fixture02()).sections['truth'] as { timeline: { at: string; who: string }[] }
+    expect(timeline.timeline).toHaveLength(5)
+    expect(timeline.timeline.map(entry => entry.who)).toEqual(['p2', 'p1', 'p0', 'p3', 'p3'])
   })
 })
 

@@ -63,6 +63,10 @@ function snapshot(state: GameState) {
  * @param ctx - 插件上下文。
  */
 export function apply(ctx: Context): void {
+  // 留痕：本插件没有任何界面元素，装没装、注册了什么，只能从这里读——否则「加载成功」
+  // 与「静默跳过」在外部看起来一模一样（peer 不满足时内核就是静默跳过的，界面不报错）。
+  // 与 dsh-allostasis 同一条判据，它的 README「诊断」段记了来由。
+  console.info(`[${name}] loaded · registers ${STATE_TOOL}`)
   ctx.tools.register(defineTool({
     name: STATE_TOOL,
     description: describeTool(),

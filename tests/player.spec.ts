@@ -45,6 +45,56 @@ describe('上台说明', () => {
   })
 })
 
+describe('谁在玩这个角色', () => {
+  it('带上演员：名字、怎么玩，以及前几局的事', () => {
+    const brief = playerBrief({
+      seat: 'p2',
+      name: '吴国强',
+      roleBook: '无',
+      actor: { name: '老周', style: '能不说就不说，能一个字答完的不用一句。', notes: ['上一局被人连珠追问逼出过话。'] },
+    })
+    expect(brief).toContain('老周')
+    expect(brief).toContain('能不说就不说')
+    expect(brief).toContain('上一局被人连珠追问')
+  })
+
+  it('那一段不写座位——同一批演员换位子是常事，写了反而像换了人', () => {
+    const brief = playerBrief({
+      seat: 'p3',
+      name: '苏雨',
+      roleBook: '无',
+      actor: { name: '老周', style: '风格。', notes: [] },
+    })
+    const section = brief.slice(brief.indexOf('谁在玩这个角色'), brief.indexOf('你的每一句发言'))
+    expect(section).not.toContain('p3')
+  })
+
+  it('没有演员时那一段整个不出现——新面孔不需要解释他是谁', () => {
+    const brief = playerBrief({ seat: 'p2', name: '吴国强', roleBook: '无' })
+    expect(brief).not.toContain('谁在玩这个角色')
+  })
+
+  it('一条印象都没有时不留下空标题', () => {
+    const brief = playerBrief({
+      seat: 'p2',
+      name: '吴国强',
+      roleBook: '无',
+      actor: { name: '老周', style: '风格。', notes: [] },
+    })
+    expect(brief).not.toContain('你还记得这些')
+  })
+
+  it('角色本排在演员那一段之后——先知道谁在玩，再看他这次演谁', () => {
+    const brief = playerBrief({
+      seat: 'p2',
+      name: '吴国强',
+      roleBook: '你要瞒的事：那箱信是你搬的。',
+      actor: { name: '老周', style: '风格。', notes: ['上局的事。'] },
+    })
+    expect(brief.indexOf('谁在玩这个角色')).toBeLessThan(brief.indexOf('你要瞒的事'))
+  })
+})
+
 describe('玩家白名单', () => {
   it('只放行说话这一项：这份名单就是「玩家只能说话」的实现', () => {
     expect(PLAYER_TOOLS).toEqual(['send_message'])

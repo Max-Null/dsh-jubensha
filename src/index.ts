@@ -19,6 +19,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SpawnTeammateResult } from '@deepseek-ai/dsh-experimental-agent-team'
 import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { openActorPool } from './actor.ts'
+import type { Actor, ActorPool } from './actor.ts'
 import { bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
@@ -28,8 +30,16 @@ import type { GameState } from './state.ts'
 /** 插件名。 */
 export const name = 'dsh-jubensha'
 
-/** 需要工具注册表。 */
-export const inject = ['tools']
+/**
+ * 需要的服务。
+ *
+ * **`storage` 必须声明，不是"用 `ctx.get` 兜着就行"**：演员池用的 `DomainFacility` 与
+ * `JsonStorageBackend` 内部按**属性**访问 `ctx.storage`，而属性代理只认声明过的注入。
+ * 2026-10-05 实测的失败样子：五个演员动作全返回 `cannot get property "storage" without
+ * inject`，连带着 `jubensha_player` 的 `spawn`（传了 `actor` 时）也一起挂——而**不传 actor
+ * 的 spawn 一直正常**，所以这个错看起来像是"演员功能坏了"，实际是插件没有声明它依赖的服务。
+ */
+export const inject = ['tools', 'storage']
 
 /**
  * 当前这一局。
@@ -50,6 +60,51 @@ const PLAYER_TOOL = 'jubensha_player'
 
 /** 本子工具名。 */
 const CASE_TOOL = 'jubensha_case'
+
+/** 演员工具名。 */
+const ACTOR_TOOL = 'jubensha_actor'
+
+/**
+ * 上台说明里带几条跨局印象。
+ *
+ * 上限是判据不是省事：印象存在池子里会一直长，而 brief 每局都要重发一遍。三条够它认出
+ * "上次栽在谁手里"，多出来的只会把角色本挤到后面去。
+ */
+const NOTES_IN_BRIEF = 3
+
+/**
+ * 演员池：跨局的那份名册。
+ *
+ * **开一次就够**：`storage.backend.register` 对重名抛 `duplicate-backend`，域也只开一次。
+ * 存成一个 Promise 而不是已开好的对象，是因为工具的执行是异步的——第一个调用进来时它可能
+ * 还在开，后来的调用应该等同一个 Promise，而不是各自去开第二份。
+ */
+let actors: Promise<ActorPool> | undefined
+
+/**
+ * 取演员池。
+ *
+ * 打开是**懒的**：没用到跨局记忆的局（比如试一本新本子）不该因为 storage 缺失而整个插件
+ * 报错。缺 storage 时错误在这里抛，只影响真正要用它的那几个动作。
+ * @param ctx - 插件上下文。
+ * @returns 打开好的演员池。
+ */
+function requireActors(ctx: Context): Promise<ActorPool> {
+  actors ??= openActorPool(ctx)
+  return actors
+}
+
+/**
+ * 把池子里的一条记录整理成工具返回值。
+ *
+ * 复制的理由与 `snapshot()` 一样：记录里的字段是 readonly，而工具的输出契约按可变数组声明
+ * （schema 表达不了 readonly），直接交出去类型不符。
+ * @param actor - 演员池里的一条记录。
+ * @returns 可交给工具输出契约的形状。
+ */
+function toActorOut(actor: Actor) {
+  return { id: actor.id, name: actor.name, style: actor.style, notes: [...actor.notes] }
+}
 
 /** 本子文件名 —— 工具按 `<dir>/case.yml` 找，这份约定写在 `schema/case.schema.yml` 头部。 */
 const CASE_FILE = 'case.yml'
@@ -317,8 +372,20 @@ function describePlayerTool(): string {
     + 'say 只负责把话送到；玩家的回答在他自己的回合里发回来，不在这次调用里等。'
 }
 
-/** 组装本子工具的描述：同样把「什么时候该调它」写在最前面。 */
-function describeCaseTool(): string {
+/** 组装演员工具的描述：同样把「什么时候该调它」写在最前面。 */
+function describeActorTool(): string {
+  return 'Keep the cast of 剧本杀 players — the people who sit down, as opposed to the roles they play this '
+    + 'time. A character comes from the case; who the player is comes from here, and it survives the session: '
+    + 'the same actor can take a different seat with a different 角色本 next game and still remember what '
+    + 'happened before. Use action="add" to bring someone in, action="note" after a game to record what he '
+    + 'carries into the next one, and hand the actor id to jubensha_player when seating him. '
+    + '剧本杀演员工具：管「这桌由谁来玩」——它跟这一局演什么角色是两回事。'
+    + '角色来自本子，人来自这里，而且**跨局活着**：同一个演员下一局可以换座位、换角色本，'
+    + '但他记得前面几局发生过什么。'
+    + 'add 是招人，note 是一局结束后记下他该带走的东西，上桌时把 actor id 交给 jubensha_player。'
+}
+
+/** 组装本子工具的描述：同样把「什么时候该调它」写在最前面。 */function describeCaseTool(): string {
   return 'Read a 剧本杀 case file kept as data: which seats it has, one role\'s own brief, the clues as the '
     + 'table sees them, or one whole section (the scene, the briefing script, the review questions). Call '
     + 'action="load" first — it also reports the format problems it finds, and that check is the reason cases '
@@ -359,7 +426,7 @@ export function apply(ctx: Context): void {
   // 留痕：本插件没有任何界面元素，装没装、注册了什么，只能从这里读——否则「加载成功」
   // 与「静默跳过」在外部看起来一模一样（peer 不满足时内核就是静默跳过的，界面不报错）。
   // 与 dsh-allostasis 同一条判据，它的 README「诊断」段记了来由。
-  console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}, ${CASE_TOOL}`)
+  console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}, ${CASE_TOOL}, ${ACTOR_TOOL}`)
   ctx.tools.register(defineTool({
     name: STATE_TOOL,
     description: describeTool(),
@@ -614,6 +681,89 @@ export function apply(ctx: Context): void {
     },
   }))
   ctx.tools.register(defineTool({
+    name: ACTOR_TOOL,
+    description: describeActorTool(),
+    parameters: {
+      action: {
+        type: 'string',
+        enum: ['list', 'add', 'note', 'show'],
+        description: 'list = 池子里都有谁（默认）；add = 招一个演员进来；note = 给他记一条跨局印象；show = 看某一个人的档案。',
+      },
+      actor: { type: 'string', description: 'note / show 用：演员 id。add 用：新演员的 id（小写字母开头，只用小写字母、数字、下划线——它同时是存储里的记录键）。' },
+      name: { type: 'string', description: 'add 用：人看的名字，比如「老周」。' },
+      style: { type: 'string', description: 'add 用：这个人怎么玩游戏——不是他这一次演的角色是什么样。' },
+      note: { type: 'string', description: 'note 用：这一局结束后他该带走的事，一两句话。' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          actors: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                style: { type: 'string' },
+                notes: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+      },
+      render: (args, value) => {
+        const list = value.actors ?? []
+        if (list.length === 0) {
+          return [{ type: 'text', text: '演员池是空的——用 action="add" 招一个进来。' }]
+        }
+        if ((args.action ?? 'list') === 'list') {
+          return [{
+            type: 'text',
+            text: list.map(actor => `${actor.id}  ${actor.name ?? ''}｜印象 ${(actor.notes ?? []).length} 条`).join('\n'),
+          }]
+        }
+        // 字段都当成可能缺的：输出契约由 JSON Schema 声明，那里的 properties 一律非必填，
+        // 所以推断出来的类型是可选——不是存储可能给空，是契约没说它一定有。
+        const actor = list[0]!
+        const notes = actor.notes ?? []
+        const lines = [`${actor.name ?? actor.id}（${actor.id}）`, actor.style ?? '']
+        lines.push(notes.length === 0
+          ? '印象：还没有——一局结束后用 action="note" 记一条。'
+          : `印象：\n${notes.map(one => `  · ${one}`).join('\n')}`)
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
+    },
+    async execute(args) {
+      const pool = await requireActors(ctx)
+      switch (args.action ?? 'list') {
+        case 'add': {
+          const { actor, name, style } = args
+          if (actor === undefined || name === undefined || style === undefined) {
+            throw new Error('add 需要 actor（id）/ name / style 三项都给。')
+          }
+          return { actors: [toActorOut(await pool.add({ id: actor, name, style }))] }
+        }
+        case 'note': {
+          const { actor, note } = args
+          if (actor === undefined || note === undefined) throw new Error('note 需要 actor 与 note 两项都给。')
+          return { actors: [toActorOut(await pool.note(actor, note))] }
+        }
+        case 'show': {
+          const { actor } = args
+          if (actor === undefined) throw new Error('show 需要 actor。')
+          const found = await pool.get(actor)
+          if (found === undefined) throw new Error(`演员池里没有 "${actor}"——先 action="list" 看看都有谁。`)
+          return { actors: [toActorOut(found)] }
+        }
+        default:
+          return { actors: (await pool.list()).map(toActorOut) }
+      }
+    },
+  }))
+  ctx.tools.register(defineTool({
     name: PLAYER_TOOL,
     description: describePlayerTool(),
     parameters: {
@@ -629,6 +779,7 @@ export function apply(ctx: Context): void {
         description: 'spawn 用：这个角色的角色本。复盘前 jubensha_case action="book" 给的是一个引用，把它（单独那一串）填进来即可——程序自己解开，正文不经过你的上下文；复盘后也可以直接给全文。只发给这一个玩家，绝不转述、绝不换座位。',
       },
       message: { type: 'string', description: 'say 用：要对这位玩家说的话——提问、转述，或阶段提示。' },
+      actor: { type: 'string', description: 'spawn 用：由池子里的哪个演员来演这一局（jubensha_actor 的 id）。不填就是个新面孔——那样他不会记得这一局，下一局也没人记得他。' },
     },
     output: {
       schema: {
@@ -661,6 +812,16 @@ export function apply(ctx: Context): void {
             throw new Error('spawn 需要 seat / name / roleBook 三项都给。')
           }
           const book = resolveBook(roleBook, seat)
+          // 演员是「谁在玩」，与「这局演谁」无关。不填就是个一次性的面孔——他不记得上一局，
+          // 下一局也没人记得他。填了就把池子里那份档案带进上台说明。
+          const actorId = args.actor
+          const actor = actorId === undefined
+            ? undefined
+            : await requireActors(ctx).then(pool => pool.get(actorId))
+          if (actorId !== undefined && actor === undefined) {
+            throw new Error(`演员池里没有 "${actorId}"——先 ${ACTOR_TOOL} action="list" 看看都有谁，`
+              + '或者用 action="add" 招一个进来。')
+          }
           // 先问座位空不空，再建子会话。反过来的话，座位被占时那个刚建好的子会话就没人管了
           // ——登记表自己也拦这一手，但那时已经晚了。
           const sitting = players.get(seat)
@@ -679,7 +840,18 @@ export function apply(ctx: Context): void {
               // 座位号 + 自带唯一性的后缀；中文角色名走 description，那才是 label。
               name: teammateName(seat),
               description: `玩家 ${playerName}（${seat}）`,
-              prompt: [{ type: 'text', text: playerBrief({ seat, name: playerName, roleBook: book }) }],
+              prompt: [{ type: 'text', text: playerBrief({
+                seat,
+                name: playerName,
+                roleBook: book,
+                ...(actor === undefined ? {} : {
+                  actor: {
+                    name: actor.name,
+                    style: actor.style,
+                    notes: actor.notes.slice(0, NOTES_IN_BRIEF),
+                  },
+                }),
+              }) }],
               context: 'fresh',
               provider: 'spawn',
               signal: exec.signal,

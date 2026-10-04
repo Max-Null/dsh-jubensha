@@ -62,6 +62,40 @@ export interface BriefInput {
   readonly name: string
   /** 角色本正文 —— DM 交给这个玩家的全部信息，也是他要守住的东西。 */
   readonly roleBook: string
+  /** 谁来演这一局。不填就是一个新面孔，上台说明里也不提这件事。 */
+  readonly actor?: ActorBrief
+}
+
+/**
+ * 上台说明里要交代的演员。
+ *
+ * **它与角色本是两层，别混**：角色本说「你这次演谁」，这里说「你是谁、你怎么玩」。
+ * 同一个人换一本子还是同一个人——这正是设计方案 §2.2 那第二层人设。
+ */
+export interface ActorBrief {
+  /** 演员的名字（人看的，不是角色名）。 */
+  readonly name: string
+  /** 这个人怎么玩游戏。 */
+  readonly style: string
+  /** 跨局攒下来的印象，新的在前。 */
+  readonly notes: readonly string[]
+}
+
+/**
+ * 演员那一段。**不写座位**——同一批演员换位子是常事，写了反而让他以为换了人。
+ * @param actor - 谁来演这一局。
+ * @returns 插在角色本之前的那一段。
+ */
+function actorSection(actor: ActorBrief): string {
+  const parts = [
+    `--- 谁在玩这个角色 ---\n这一局由「${actor.name}」来演。你怎么玩这个游戏，跟你这次拿到什么角色无关：`,
+    actor.style,
+  ]
+  if (actor.notes.length > 0) {
+    parts.push('你还记得这些（都是**前面几局**的事，跟这一局的人无关）：')
+    parts.push(actor.notes.map(note => `- ${note}`).join('\n'))
+  }
+  return parts.join('\n')
 }
 
 /**
@@ -76,17 +110,23 @@ export interface BriefInput {
  * 只写游戏层的事：他是谁、话怎么传到桌上、他的角色本是什么。**不写**「你没有别的工具」
  * 这类权限说明——内核已经给每个子 agent 注入了委派范围声明（`SUBAGENT_DELEGATION_CONTEXT`），
  * 再说一遍只是噪声。
- * @param input - 座位、角色名与角色本。
+ * @param input - 座位、角色名、角色本，以及谁来演这一局。
  * @returns 作为子会话首条用户消息的文本。
  */
 export function playerBrief(input: BriefInput): string {
-  return `你是「${input.name}」，坐在 ${input.seat} 号位。这是一桌剧本杀，你是**玩家**，不是助手：`
-    + '你要以这个角色的身份说话、被人盘问、也盘问别人，而不是帮谁完成任务。\n\n'
-    + '你的每一句发言都用 send_message 发给 "lead"——那就是主持人，target 就填这一串。'
-    + '发言没发出去，就等于你什么都没说——桌上没有人替你转达。\n'
-    + '消息正文就是你说出口的话，不要加「我说：」这类前缀，也不要在消息之外补充说明。\n\n'
-    + `--- 你的角色本 ---\n${input.roleBook}\n--- 角色本结束 ---\n\n`
-    + '角色本没写的事，你就是不知道。想知道，去问别人。'
+  const parts = [
+    `你是「${input.name}」，坐在 ${input.seat} 号位。这是一桌剧本杀，你是**玩家**，不是助手：`
+      + '你要以这个角色的身份说话、被人盘问、也盘问别人，而不是帮谁完成任务。',
+  ]
+  if (input.actor !== undefined) parts.push(actorSection(input.actor))
+  parts.push(
+    '你的每一句发言都用 send_message 发给 "lead"——那就是主持人，target 就填这一串。'
+      + '发言没发出去，就等于你什么都没说——桌上没有人替你转达。\n'
+      + '消息正文就是你说出口的话，不要加「我说：」这类前缀，也不要在消息之外补充说明。',
+  )
+  parts.push(`--- 你的角色本 ---\n${input.roleBook}\n--- 角色本结束 ---`)
+  parts.push('角色本没写的事，你就是不知道。想知道，去问别人。')
+  return parts.join('\n\n')
 }
 
 /** 一局里的玩家登记表。 */

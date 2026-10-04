@@ -1,7 +1,7 @@
 {
   // typecheck 用这一份：覆盖 src 与 tests，只检查不产出。
-  // 构建走 tsconfig.build.json（只含 src、rootDir=src、落 dist）——
-  // 两件事的 rootDir 要求相反，合在一份配置里必然有一头错。
+  // 构建走 tsdown（宿主半边 tsc 语义、浏览器半边 esbuild 语义，见 tsdown.config.ts）——
+  // 两边的产物形状不同，所以不再用一份 tsc 配置同时管两件事。
   //
   // 与 dsh-memory 同一形态：依赖真装在 node_modules，类型就从那里解析，不用 paths
   // 指到相邻 checkout。类型来源必须与**运行时装的那版内核**一致；指到 checkout 会让
@@ -18,6 +18,8 @@
     "rewriteRelativeImportExtensions": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
+    // 浏览器半边是 TSX。`react-jsx` 是 React 17 起的自动运行时——不必每篇都 import React。
+    "jsx": "react-jsx",
     "types": ["node"],
     "noEmit": true
   },

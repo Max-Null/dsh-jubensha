@@ -1,0 +1,11 @@
+# dsh-jubensha bundle patch: one insert over the profile root.
+#
+# 本插件只**新增**自己的条目（工具与提示段），不替换任何既有条目——
+# 需要按 Agent 收窄工具时走 js 侧的 scoped 注册，不在这里改 profile 组成，
+# 免得连 DM 一起限。
+#
+# 本子（剧本）与角色本不属于插件运行时内容：本子是数据，按 `schema/case.schema.yml`
+# 写好后由工具读取；角色本只在开局时经消息送达对应 agent，不落盘。
+- insert:
+    - id: jubensha
+      name: '@max-null/dsh-jubensha'

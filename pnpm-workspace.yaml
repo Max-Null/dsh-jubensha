@@ -1,0 +1,13 @@
+# 工作区根标记：阻断 pnpm 向上查找父级工作区。
+# 本仓库自成一个包，不参与任何 monorepo。
+packages: []
+# esbuild 要跑安装脚本（把平台二进制接进 node_modules），vitest 依赖它。
+#
+# pnpm 11 起默认不跑依赖的构建脚本：未批准的构建让 install 以非零码退出
+# （strictDepBuilds 默认 true），而 `pnpm run` 开头的 deps-status 检查会因此把
+# **每一条脚本命令**都挡在外面——症状是 `pnpm test` 压根没执行测试，只在 install 处失败。
+#
+# 设置只能写在这里：v11 移除了 onlyBuiltDependencies 等旧字段，并且不再读
+# package.json 的 pnpm 字段（写那里会被忽略并告警）。两条错路都实测踩过。
+allowBuilds:
+  esbuild: true

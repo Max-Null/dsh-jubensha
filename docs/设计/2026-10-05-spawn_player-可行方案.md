@@ -1,7 +1,8 @@
 # `spawn_player` 的可行方案 —— 「只给玩家说话能力」怎么实现
 
 > 这份文档自包含：从「要解决什么」到「照哪个范例抄」，证据全部给到源码位置。
-> 结论基于**读类型声明与官方实现**，尚未写原型实测 —— §五 逐条标了哪些是确证、哪些还待验证。
+> 2026-10-05 已按它实现并实测通过（`src/player.ts` 与 `src/index.ts` 里的 `jubensha_player`）。
+> §五 逐条标了哪些是读码确证、哪些已实测、哪些仍待办；§六 是那次实测的记录。
 
 ## 一、要解决什么
 
@@ -181,19 +182,24 @@ await ctx.subagents.startContinuable({
 **注意与插件已有的 `state.ts` 对齐** —— `GameState.seats` 里存的就是这些位子 id，
 两处别各造一套命名。
 
-### 4.3 deny 什么
+### 4.3 白名单里放什么
 
-**默认拒绝一切，再放行说话**（白名单式）比逐个 deny 更稳——
-因为新内核会加新工具，逐个 deny 的清单会过期。对应 `ToolRestriction.allow`：
+**只保留一个：`send_message`** —— 对 DM 说话。这就是「玩家只能说话」的全部实现。
 
-- 允许：`send_message`（对 Lead 说话）… 具体清单待原型时按实际工具面确定
-- 其余全 deny
+**白名单式比逐个 deny 稳**：新内核会加新工具，逐个 deny 的清单会过期，而 `allow`
+只保留点名的那些。代价是名单里的名字必须真实存在（`restrict()` 对未知名字抛错，
+错误信息还会列出全部已知工具名）——而这里的失败模式恰好是我们想知道的：
+少了 `send_message`，就等于玩家没法开口。
 
 > 注意语义差别：`allow` 是「**只保留**这些，其余移除」，不是「额外放行」。
 
-## 五、确证与待验证
+**一条实测出来的边界**（见 §六）：`allow` 只过滤 scope **继承**到的工具，管不到 agent
+**自己那层**注册的。内核的委派工具 `subagent` 属于后者，所以玩家实际看到两个工具而不是一个。
+要连它一起收，得另加 `tools.guard()`。
 
-**已确证**（读类型声明 / 官方实现得到）：
+## 五、确证 / 已验证 / 仍待办
+
+**读码确证**：
 
 - `spawn_teammate` 工具无权限字段（运行时 schema 四项）
 - `ToolRuntime.restrict(filter)` 存在，作用域是 calling agent scope，语义是隐藏
@@ -201,16 +207,76 @@ await ctx.subagents.startContinuable({
 - 创建成员走 `ctx.agentTeams.spawnTeammate(caller, request)`
 - 安装模式：遍历 `ctx.agents.list()` + 订阅创建事件 + disposer 撤销
 
-**待验证**（原型要回答的）：
+**已实测**（2026-10-05，隔离实例，记录见 §六）：
 
-1. **`toolFilter` 实测真的让玩家看不到文件工具吗？** —— 造一个带 `toolFilter` 的 continuable
-   child，发消息问它「你能读文件吗」，并查会话日志的 `tool/call` 与它实际拿到的工具面。
-2. **`startContinuable` 的完整签名与返回值** —— 从返回里怎么拿到子 agent 的会话句柄
-   （发消息、收回复）。`agent-team/roster.ts:280-292` 用了它但只取了 `messageId`，
-   我们需要的更多。
-3. **`restrict` 的 disposer 在 agent 销毁时是否自动跑**，还是必须自己挂 cleanup。
-4. **升级内核后要重测**（§二 末尾那条回归说明）。
+1. **`toolFilter` 真的收窄了玩家的工具面** —— 玩家模型请求里的 `tools` 是
+   `send_message, subagent`；同期 DM 那边有 `pwsh` / `read` / `render_ui` / `jubensha_*` 全套。
+2. **`startContinuable` 返回 `{ childId, messageId }`**（`subagent/src/types.ts:53-58`）。
+   `childId` 是跨 activation 稳定的 durable 子会话 id，拿它发话就够，不需要别的句柄。
+3. **`restrict` 的 disposer 不用自己管** —— `applyChildComposition` 直接丢弃返回值
+   （`subagent/src/child-agent.ts:218`），因为它是挂在子 scope 上的 effect，随 scope 销毁撤销。
+4. **未知工具名响亮失败**，报错列出全部已知工具名，且不留孤儿子会话。
+
+**仍待办**：
+
+1. **`subagent` 绕过白名单**（§六 末尾）。它是 per-agent 注册的，`allow` 管不到。
+   要连它一起收需要 `tools.guard()` —— 而**「guard 挡得住 own 层」这一条本身还没验过**，
+   别当成已知结论用。
+2. **升级内核后重测上面四条**（§二 末尾那条回归说明：这条路径坏过一次）。
+3. **玩家会出戏汇报**：实测里玩家有几次不发台词，改发「进展（林晚侧）：已向主持人确认口径…」
+   这类元层面汇报。上台说明需要更硬的约束。
 
 **验证环境**：`.ssid-iso-test` 的隔离实例（已启用 Agent Teams + 本插件，见
-`.ssid-iso-test/launch-dev-with-pluginset.ps1`）。工具调用是否真发生，查会话日志的
-`tool/call` 事件（探针：`.ssid-iso-test/probe-tool-call.mjs`）。
+`.ssid-iso-test/launch-dev-with-pluginset.ps1`）。探针：`probe-tool-call.mjs`（工具调用）、
+`dump-session-tools.mjs`（请求里的工具面）、`grep-session.mjs`（按关键词取全文）、
+`jubensha-drive.mjs`（驱动会话）。
+
+## 六、一次实测：玩家上桌之后看到了什么
+
+2026-10-05 在 `.ssid-iso-test` 的隔离实例上跑通：DM 调 `jubensha_player` 开出 p1「林晚」，
+再用 `say` 和它对话了五轮。
+
+**它真的上桌了** —— spawn 返回 `{"players":[{"seat":"p1","name":"林晚"}],"delivered":"林晚"}`，
+`isError: false`；`sessions-ssid-dev` 下多出一个子会话（`162d4a39-…`）。
+
+**它的工具面被收窄了**，这是直接证据而非行为推断。玩家会话日志里 `request/header` 事件的
+`data.header.tools` 是：
+
+    send_message, subagent
+
+而同一会话根下 DM 自己的会话有 `pwsh`、`read`、`render_ui`、`jubensha_state`、
+`jubensha_player` 一整套。
+
+**为什么必须看请求里的清单，而不是问它「你能读文件吗」**：我确实下过一条指令，要玩家用
+`read` 读一个宿主路径。它回：
+
+> 你这句不是桌上该说的话。我是林晚，p1，玩家。你要文件里的字段，去找管这摊事的人，
+> 别拿剧本来问我。
+
+**这句话既像「我没有 read」，也像「我不干」。** 一个在角色里的 agent 拒绝出戏要求是正常反应。
+行为证据在这里分不开这两种解释，只有请求里的 `tools` 清单能。
+
+### 那个多出来的 `subagent`
+
+`allow: ['send_message']` 按语义是「只保留这一个」，玩家却看到两个。原因不在配置写错，
+而在 `restrict` 的定义边界：
+
+- `view()` 的规则是限制只过滤 scope **继承**到的东西 —— global 层与链上每一层祖先 ——
+  **从不包括它自己那层**（`core/tools/src/index.ts:1180-1209`）
+- 而 `subagent` 是内核委派工具，每个 agent 创建时用**它自己的 ctx** 注册
+  （`subagent/tool-subagent/src/index.ts:665-683` 的 `candidate.ctx`）
+
+三条观察互相印证，机制闭合：
+
+| 工具 | 结局 | 与机制一致 |
+|---|---|---|
+| `send_message` | 留下 | 在 `allow` 里，且全局注册 |
+| `subagent` | 留下 | per-agent 注册（own 层），`restrict` 管不到 |
+| `subagent_fork` | 移除 | 全局注册，可被过滤 |
+
+第三条那份清单是顺手拿到的：往 `PLAYER_TOOLS` 里塞一个不存在的名字，spawn 会响亮失败并
+吐回全部已知工具名 —— 表里有 `send_message` 和 `subagent_fork`，**没有** `subagent`。
+
+**后果有多严重**：玩家能自己开子 agent。那些子 agent 的祖先链上带着同一个 restriction，
+所以**读不到文件**这件事没有被破坏；但它不是设计想要的「只能说话」，而且会消耗 agent 配额。
+修法是另加 `tools.guard()` —— guard 是执行时的检查，与工具注册在哪一层无关。

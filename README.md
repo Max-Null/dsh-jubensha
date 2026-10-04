@@ -104,11 +104,11 @@ dsh plugin add @max-null/dsh-jubensha
   （撞 `TEAM_MEMBER_NAME_TAKEN`）。插件给座位号缀了单调后缀绕开，但团队名册本身是累积的。
 - **玩家会出戏**：实测里玩家有几次不发台词，改发「进展（林晚侧）：已向主持人确认口径…」
   这类元层面汇报。上台说明还需要更硬的约束。
-- **一个 DM 会话最多 8 位 AI 玩家，而且只减不增**：Team 名册的上限来自
-  `experimental/agent-team-profile/cordis.patch.yml` 的 `maxMembers: 8`（内核默认是 16），
-  而名册条目是**不可移除**的（没有 `removeMember` / `dismiss` 之类接口）——`unseat` 只清本插件
-  的座位表，不会让名册腾出位子。按每局 3 位 AI 玩家算，**同一个会话开不了三局**。
-  出路是换一个会话（新会话 = 新 Team），或把那个 `maxMembers` 配大。
+- **一个会话打一局**：Team 名册一个会话最多 8 位 teammate，而条目**不可移除**（上限来自
+  `experimental/agent-team-profile/cordis.patch.yml` 的 `maxMembers: 8`，内核默认是 16），
+  按每局 3 位 AI 玩家算**开不了三局**。约定是**一局一换会话**。（绕开 Team 直接用
+  `ctx.subagents.startContinuable` 也能解，但那会丢掉已验证的 Team 实践，不值。）
+  **推论**：跨局的连续性只能靠落盘的玩家档案，不能靠会话上下文——见下。
 - **封存不是物理隔离**：真相保险箱挡住的是**顺手泄漏**（发角色本必看全座位秘密那条路），
   不是"DM 看不到"。DM 是主 agent，它真要主动 `read` 本子文件，谁也拦不住。判据只有一条：
   **按正常工作流程带局时，答案不流经它的上下文。** 另一半仍未解决——人类玩家这一侧没有

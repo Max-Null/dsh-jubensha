@@ -16,6 +16,8 @@
  * @module @max-null/dsh-jubensha/room
  */
 import type { Context } from '@deepseek-ai/cordis'
+// re-export 不会把名字带进本文件的局部作用域，所以下面那个签名还要自己 import 一次。
+import type { RoomSnapshot } from './room-types.ts'
 
 /** 一个请求的头。 */
 type RequestHeaders = Record<string, string | string[] | undefined>
@@ -100,57 +102,14 @@ function writeJson(res: unknown, status: number, body: unknown): void {
   response.end(JSON.stringify(body))
 }
 
-/** 面板要显示的一局。 */
-export interface RoomGame {
-  /** 本子编号。 */
-  readonly caseId: string
-  /** 本子名。 */
-  readonly title: string
-  /** 桌上的位子。 */
-  readonly seats: readonly string[]
-  /** 真人占的位子。 */
-  readonly humanSeat: string
-  /** 现在到哪个阶段。 */
-  readonly phase: string
-  /** 第几轮。 */
-  readonly round: number
-  /** 已经发到桌上的线索 id。 */
-  readonly revealedClues: readonly string[]
-  /** 是不是已经到复盘了。 */
-  readonly finished: boolean
-}
-
-/** 桌上的一位 AI 玩家。 */
-export interface RoomPlayer {
-  /** 座位 id。 */
-  readonly seat: string
-  /** 角色名。 */
-  readonly name: string
-}
-
-/** 演员池里的一位。 */
-export interface RoomActor {
-  /** 演员 id。 */
-  readonly id: string
-  /** 人看的名字。 */
-  readonly name: string
-  /** 他怎么玩。 */
-  readonly style: string
-  /** 跨局印象（新的在前）。 */
-  readonly notes: readonly string[]
-  /** 头像图片；没配时面板按 id 生成一个。 */
-  readonly avatar?: string
-}
-
-/** 面板读的那一份快照。 */
-export interface RoomSnapshot {
-  /** 当前这一局；还没开局时为 `null`。 */
-  readonly game: RoomGame | null
-  /** 桌上的 AI 玩家。 */
-  readonly players: readonly RoomPlayer[]
-  /** 演员池。 */
-  readonly actors: readonly RoomActor[]
-}
+/**
+ * 快照的形状住在 `room-types.ts`。
+ *
+ * 那个文件零依赖，所以浏览器半边引得起；本文件 import 了 cordis，而浏览器半边的打包有一道
+ * 纯度门会拒掉 `@deepseek-ai/*` 的任何导入（类型导入也不例外——那道门看模块解析，不看擦除
+ * 之后的结果）。这里再导出一次是为了让"房间这件事的宿主侧"仍是一个入口。
+ */
+export type { RoomActor, RoomGame, RoomPlayer, RoomSnapshot } from './room-types.ts'
 
 /**
  * 挂 `/jubensha/room`。

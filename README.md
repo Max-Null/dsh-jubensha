@@ -44,7 +44,9 @@
     推进到 `reveal` 之后解封（返回里带 `culprit`）
   - `jubensha_player action="relay"`：验到它取回的是那位玩家的**原话**（判据见下）
   - `jubensha_actor`：建演员、记印象、列池子、看档案全通；**重启进程之后仍在**——
-    落盘在 `$DSH_HOME/storages/jubensha.json`
+    落盘在 `$DSH_HOME/storages/jubensha.json`。带演员上桌也验到了：在**新会话**里 `spawn`
+    成功，而玩家子会话收到的第一条消息里，演员段（名字、怎么玩、上局的印象）**排在角色本
+    之前**，引用已解成正文（判据取自子会话自己的日志，不是 `spawn` 的返回值）
 
 工具面四项：`jubensha_state`（开一局 / 推进阶段 / 公布线索 / 查看局面）、
 `jubensha_player`（让玩家上桌 / 对某位玩家或全桌说话 / 把某位玩家的话转达给其他人 /
@@ -124,5 +126,3 @@ dsh plugin add @max-null/dsh-jubensha
 - **跨局的东西目前只有演员池**：局面、座位、玩家登记都随会话消失，所以「跨局记忆」现在到
   「这个人记得什么」为止，还不到「这批人之间的旧账」。演员的**印象靠主持人一局结束时写**
   （`jubensha_actor action="note"`）——他不写，这一局就什么都不剩。
-- **带演员上桌还没验到**：`spawn` 传 `actor` 的那次走到了 `Team member limit 8 reached`
-  （名册满，见上），所以「演员真的坐上了桌、拿到了带跨局印象的上台说明」只有间接证据。

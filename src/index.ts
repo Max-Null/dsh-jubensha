@@ -24,6 +24,8 @@ import type { Actor, ActorPool } from './actor.ts'
 import { bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
+import { mountRoomApi } from './room.ts'
+import type { RoomSnapshot } from './room.ts'
 import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
 
@@ -38,8 +40,11 @@ export const name = 'dsh-jubensha'
  * 2026-10-05 实测的失败样子：五个演员动作全返回 `cannot get property "storage" without
  * inject`，连带着 `jubensha_player` 的 `spawn`（传了 `actor` 时）也一起挂——而**不传 actor
  * 的 spawn 一直正常**，所以这个错看起来像是"演员功能坏了"，实际是插件没有声明它依赖的服务。
+ *
+ * `webServer` / `webRuntime` 是房间端点用的：面板在浏览器里，与宿主不共享服务，
+ * 只能走插件自己的 HTTP 端点（见 `room.ts`）。
  */
-export const inject = ['tools', 'storage']
+export const inject = ['tools', 'storage', 'webServer', 'webRuntime']
 
 /**
  * 当前这一局。
@@ -451,6 +456,31 @@ export function apply(ctx: Context): void {
   // 与「静默跳过」在外部看起来一模一样（peer 不满足时内核就是静默跳过的，界面不报错）。
   // 与 dsh-allostasis 同一条判据，它的 README「诊断」段记了来由。
   console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}, ${CASE_TOOL}, ${ACTOR_TOOL}`)
+  // 房间面板读的那一份快照。**只读**——开一局、推进阶段、发线索都在对话里说，
+  // 面板不发号施令（设计方案里「界面是附加层」那条约束）。
+  mountRoomApi(ctx, async (): Promise<RoomSnapshot> => {
+    const actors = await requireActors(ctx).then(pool => pool.list())
+    return {
+      game: current === undefined ? null : {
+        caseId: current.caseId,
+        title: current.title,
+        seats: [...current.seats],
+        humanSeat: current.humanSeat,
+        phase: current.phase,
+        round: current.round,
+        revealedClues: [...current.revealedClues],
+        finished: isFinished(current),
+      },
+      players: players.list().map(player => ({ seat: player.seat, name: player.name })),
+      actors: actors.map(actor => ({
+        id: actor.id,
+        name: actor.name,
+        style: actor.style,
+        notes: [...actor.notes],
+        ...(actor.avatar === undefined ? {} : { avatar: actor.avatar }),
+      })),
+    }
+  })
   ctx.tools.register(defineTool({
     name: STATE_TOOL,
     description: describeTool(),

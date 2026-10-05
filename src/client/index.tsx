@@ -36,6 +36,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { RoomSnapshot } from '../room-types.ts'
 import { RoomView } from './room.tsx'
 import { NoteLayer } from './notes.tsx'
+import { installHiddenEntry, fillComposer } from './hidden-entry.ts'
 import { saidDefinition, readSaid, type SaidLine } from './said.ts'
 import { SettingsTab } from './settings.tsx'
 import { en, zh } from './locales.ts'
@@ -49,6 +50,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** 需要的服务：`locale` 注册文案，`slots` 挂标签，`sessions` 找会话绑定，`uiConversation` 读投影。 */
 export const inject = ['locale', 'slots', 'sessions', 'uiConversation']
+
+/**
+ * 连点三下标题之后填进输入框的那句话。
+ *
+ * 写得像人话，因为它会**出现在用户的输入框里**——他看得见、能改、能删。而它也得让模型一眼
+ * 知道该干什么：插件注册的 `jubensha_*` 工具就摆在那儿，这句话就是那条路的开头。
+ */
+const HIDDEN_ENTRY_TEXT = '来一局剧本杀'
 
 type Locale = PropsLocale<'jubensha'>
 
@@ -142,6 +151,15 @@ export function TeamView({
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register('jubensha', { zh, en }), 'jubensha: dictionaries')
+  // 隐蔽入口：新会话那一页连点标题三下，输入框里就出现那句话。
+  //
+  // **它不属于任何会话**，所以挂在这里、挂一次——那一页恰恰是没有会话的时候。而它也不碰 DSH 的
+  // 任何东西：只是听 `document` 上的点击，够三下就把一句话填进输入框（`hidden-entry.ts` 里写了
+  // 为什么是「填」而不是「发」，以及为什么按 class 后缀认标题）。
+  ctx.effect(
+    () => installHiddenEntry(() => { fillComposer(HIDDEN_ENTRY_TEXT) }),
+    'jubensha: hidden entry',
+  )
   // 「谁说了什么」的投影。注册它之后，会话里那些 `agent/inbox/spliced` 会被折成房间页能读的
   // 东西——而**对话流里不会多出一行**（`visibility: 'hidden'`）。
   ctx.effect(() => ctx.uiConversation.events.register(saidDefinition), 'jubensha: said definition')

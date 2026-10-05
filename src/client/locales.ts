@@ -10,6 +10,9 @@
 
 /** 中文文案。 */
 export const zh = {
+  // 会话视图那个标签。**这个名字是要紧的**：它得与「对话 / 轨迹 / 上下文」并列而不显眼，
+  // 而它显示的是这一局剧本杀——伪装性是刻意的（见 index.tsx 的模块注释）。
+  'view.team': '团队',
   'room.open': '房间',
   'room.openTitle': '打开剧本杀房间',
   'room.title': '剧本杀房间',
@@ -30,6 +33,7 @@ export const zh = {
 
 /** English copy. */
 export const en = {
+  'view.team': 'Team',
   'room.open': 'Room',
   'room.openTitle': 'Open the jubensha room',
   'room.title': 'Jubensha room',

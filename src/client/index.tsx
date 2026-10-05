@@ -28,7 +28,8 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// 声明合并 `plugins.bundle.config` 那个槽——插件管理给别的插件留的配置位。
+import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 // 声明合并 `ctx.uiConversation`：它的 `binding(sessionId)` 是读 Chat 目标的那一跳。
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -159,14 +160,17 @@ export function apply(ctx: Context): void {
       return { sessionId, readSaid: () => readSaid(chat.getSnapshot()) }
     },
   }, TeamView))
-  // 设置页。挂 `settings.plugins.tab` 而**不是** `settings.section`：功能插件不占左边那列导航，
-  // 只往「插件」那一栏贡献一个页面——所以它出现在「设置 → 插件 → 剧本杀」。
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-    name: 'settings.plugins.tab',
-    id: 'jubensha',
-    // 排在「全部插件」之后。
-    order: 20,
+  // 插件管理里「@max-null/dsh-jubensha」那一页的配置区。
+  //
+  // **挂 `plugins.bundle.config`，不是 `settings.plugins.tab`。** DSH 0.2.0 把插件配置放在
+  // 插件管理里（侧栏「插件」那一页）：一张卡片点开是那个包的详情页，而配置就渲染在描述与它
+  // 声明的 rows 之间。`settings.plugins.tab` 是「设置 → 插件」那一栏的 tab——那是另一个界面。
+  //
+  // key 是**包名**：这个槽按包名认领，而 `plugins.row.config` 才是按 `<包名>#<行id>`。
+  ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+    name: 'plugins.bundle.config',
+    // keyed 槽认的是 `key`，没有 `id`——`id` 是 list 槽才有的。
+    key: '@max-null/dsh-jubensha',
     locale: 'jubensha',
-    label: () => ctx.locale.bind('jubensha')('set.tab'),
   }, SettingsTab))
 }

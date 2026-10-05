@@ -18,7 +18,7 @@
  *
  * @module @max-null/dsh-jubensha/client/room
  */
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RoomCase, RoomCaseRelation, RoomSnapshot } from '../room-types.ts'
 import { avatarSvg } from '../avatar.ts'
@@ -97,25 +97,168 @@ export function Face({ id, avatar, size = 30 }: { id: string; avatar?: string; s
  * @returns 一张 SVG。
  */
 /**
- * 人物关系：**中心一行，其余每行一个**。
+ * 放大后的关系图：**连线图**。这一层才有画它的地方。
  *
- * 前后试过两版图形布局，都撞：
- * · 正圆星形（中心在正中、其余按角度均分）——半径一大就出界、一小就重叠，中间没有可调的空档；
- * · 错开的树形（中心在上、其余两列往下走）——四条线的标签全落在中心附近那一小片，堆成一团。
+ * 缩略（左栏那 258px）用列表，点开之后弹窗给足空间——连线图那套本来就需要宽度：节点摆在四角、
+ * 标签写在线旁，而这两样都要地方。原型画的就是这个（`docs/设计/原型/房间-原型.html`），当时
+ * 画得对是因为它假定标签只有两三个字；在弹窗里那个假定重新成立——四个标签各占一方，互不相干。
  *
- * 根因是**这块地方只有 258px 宽**：「一个中心 + 四个节点 + 四条带字的连线」在这个宽度里无论
- * 怎么排都会打架——图上要放的东西比地方多。所以换掉图形，改成列表：一行一个人，名字在左、
- * 关系在右。它读起来仍然是「**其余每个人都是与他的关系**」，而那个意思原本就该由列表承担，
- * 用不着靠几何去表达。
+ * @param props - 关系、中心那个人、以及关闭回调。
+ * @returns 遮罩 + 弹窗。
+ */
+function RelationDialog({ relations, center, onClose, t }: Locale & {
+  relations: readonly RoomCaseRelation[]
+  center: string
+  onClose: () => void
+}) {
+  // Esc 也关。监听挂在 document 上，因为焦点不一定在弹窗里。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const width = 660
+  const height = 470
+  const midX = width / 2
+  const midY = height / 2
+  /** 四角。角上空间最大，而标签就写在从中心过去的路途中。 */
+  const corners = [
+    { x: 92, y: 78 },
+    { x: width - 92, y: 72 },
+    { x: 82, y: height - 74 },
+    { x: width - 82, y: height - 80 },
+  ]
+  // 关系的两端都出现在这本子里才画。顺序按 relations 自己的顺序，好让角上的位置稳定。
+  const ends: string[] = []
+  for (const one of relations) {
+    if (one.from === center && !ends.includes(one.to)) ends.push(one.to)
+    else if (one.to === center && !ends.includes(one.from)) ends.push(one.from)
+  }
+  const at = (name: string): { x: number, y: number } => {
+    if (name === center) return { x: midX, y: midY }
+    const index = ends.indexOf(name)
+    return index < 0 ? { x: midX, y: midY } : corners[index % corners.length] ?? corners[0]!
+  }
+
+  return <div
+    // 点遮罩关掉。`role="presentation"` 是给静态检查看的：它只接点击，不是控件。
+    role="presentation"
+    onClick={onClose}
+    style={{
+      position: 'fixed', inset: 0, zIndex: 60,
+      background: 'rgba(0,0,0,0.42)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      // 从缩略那边「长出来」的感觉：遮罩淡入、弹窗放大到 1。
+      animation: 'jubensha-fade 140ms ease-out',
+    }}
+  >
+    <style>{`
+      @keyframes jubensha-fade { from { opacity: 0 } to { opacity: 1 } }
+      @keyframes jubensha-grow { from { opacity: 0; transform: scale(0.88) } to { opacity: 1; transform: scale(1) } }
+    `}</style>
+    <div
+      role="dialog"
+      aria-label={t('left.relations')}
+      onClick={event => event.stopPropagation()}
+      style={{
+        width: `min(${width + 48}px, 94vw)`,
+        maxHeight: '88vh', overflow: 'auto',
+        background: 'var(--dsw-surface, #fff)',
+        borderRadius: '14px',
+        boxShadow: '0 18px 60px rgba(0,0,0,0.32)',
+        padding: '16px 24px 20px',
+        boxSizing: 'border-box',
+        animation: 'jubensha-grow 170ms cubic-bezier(0.2, 0.9, 0.3, 1)',
+      }}
+    >
+      <div style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        marginBottom: '4px',
+      }}>
+        <div style={{ fontSize: '13px', fontWeight: 600 }}>{t('left.relations')}</div>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            font: 'inherit', fontSize: '12px', padding: '3px 10px', borderRadius: '7px',
+            cursor: 'pointer', border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.3))',
+            background: 'transparent', color: 'inherit',
+          }}
+        >{t('common.close')}</button>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+        {relations.map((one, index) => {
+          const from = at(one.from)
+          const to = at(one.to)
+          return <line
+            key={`e${index}`}
+            x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+            stroke="var(--dsw-border-subtle, rgba(127,127,127,0.45))"
+            strokeWidth={1.3}
+          />
+        })}
+        {/* 标签画在线的**靠中心那一头**（0.38 处）——那一段是从中心散开的地方，四个方向彼此
+            分开得最彻底，所以四条标签各占一方。这正是 258px 里做不到、而这里做得到的事。 */}
+        {relations.map((one, index) => {
+          const from = at(one.from)
+          const to = at(one.to)
+          const px = from.x + (to.x - from.x) * 0.38
+          const py = from.y + (to.y - from.y) * 0.38
+          return <text
+            key={`l${index}`}
+            x={px} y={py} textAnchor="middle"
+            style={{
+              fontSize: '10.5px', fill: 'currentColor', opacity: 0.72,
+              // 描边把线遮断，标签读起来是「贴在线上的一句话」而不是「被线划掉的字」。
+              paintOrder: 'stroke', stroke: 'var(--dsw-surface, #fff)', strokeWidth: '4px',
+              strokeLinejoin: 'round',
+            }}
+          >{one.label}</text>
+        })}
+        {[center, ...ends].map(name => {
+          const { x, y } = at(name)
+          const isCenter = name === center
+          const boxW = isCenter ? 108 : 96
+          const boxH = isCenter ? 40 : 34
+          return <g key={name}>
+            <rect
+              x={x - boxW / 2} y={y - boxH / 2} width={boxW} height={boxH} rx={10}
+              fill={isCenter
+                ? 'var(--dsw-surface-sunken, rgba(127,127,127,0.16))'
+                : 'var(--dsw-surface-sunken, rgba(127,127,127,0.09))'}
+              stroke="var(--dsw-border-subtle, rgba(127,127,127,0.3))"
+            />
+            <text x={x} y={y + 5} textAnchor="middle" style={{
+              fontSize: isCenter ? '13px' : '12px', fill: 'currentColor',
+              fontWeight: isCenter ? 600 : 500,
+            }}>{name}</text>
+          </g>
+        })}
+      </svg>
+    </div>
+  </div>
+}
+
+/**
+ * 人物关系：**缩略一行一个，点开是连线图**。
+ *
+ * 试过三版图形布局都撞（正圆星形、错开的树形、以及把标签挪来挪去）——根因是**地方不够**：
+ * 这块只有 258px 宽，「一个中心 + 四个节点 + 四条带字的连线」在这个宽度里无论怎么排都会打架。
+ *
+ * 用户给的解法比我的三版都好：**缩略用列表、点开弹窗画连线图**——「就像缩略图和原图的关系」。
+ * 于是两件事各自成立：列表在窄栏里好读、而连线图拿到足够宽度之后才能画（原型那套本来就需要
+ * 宽度，它的标签假定是两三个字）。
  *
  * @param props - 关系列表、中心那个人、以及本子里所有角色名。
- * @returns 关系表。
+ * @returns 关系表（可点开）。
  */
 function RelationGraph({ relations, center, names, t }: Locale & {
   relations: readonly RoomCaseRelation[]
   center: string
   names: readonly string[]
 }) {
+  const [expanded, setExpanded] = useState(false)
   // 以中心那一端为轴分三类：他指向别人的、别人指向他的、以及不经过他的。前两类同一种读法，
   // 第三类单独列——**不能因为它没连到中心就不画**，那也是关系。
   const arms: { who: string, label: string }[] = []
@@ -129,6 +272,8 @@ function RelationGraph({ relations, center, names, t }: Locale & {
   // 反过来，本子里**没给某个人写关系**时也得把他列出来：漏一个人比少一条关系更让人摸不着头。
   const listed = new Set(arms.map(one => one.who))
   const missing = names.filter(one => one !== center && !listed.has(one))
+  // 弹窗里画得下才给它入口：一条关系都没有时点开也没东西看。
+  const canExpand = relations.length > 0
 
   const row = (who: string, label: string, key: string) =>
     <div key={key} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', minHeight: '22px' }}>
@@ -148,7 +293,7 @@ function RelationGraph({ relations, center, names, t }: Locale & {
         : <span style={{ fontSize: '10.5px', opacity: 0.68, lineHeight: 1.35 }}>{label}</span>}
     </div>
 
-  return <div>
+  const body = <>
     <div style={{
       display: 'inline-flex', alignItems: 'center',
       padding: '3px 10px', borderRadius: '8px', marginBottom: '2px',
@@ -165,6 +310,30 @@ function RelationGraph({ relations, center, names, t }: Locale & {
       <div style={{ fontSize: '10px', opacity: 0.5, marginBottom: '2px' }}>{t('left.between')}</div>
       {between.map((one, index) => row(`${one.from} · ${one.to}`, one.label, `b${index}`))}
     </div>}
+  </>
+
+  if (!canExpand) return <div>{body}</div>
+
+  return <div>
+    <button
+      type="button"
+      onClick={() => setExpanded(true)}
+      title={t('left.expandHint')}
+      style={{
+        // 整块可点，而外观仍像原来的那张表——只在鼠标经过时给一点反馈。
+        display: 'block', width: '100%', textAlign: 'left',
+        font: 'inherit', color: 'inherit', cursor: 'zoom-in',
+        padding: '4px 6px 6px', margin: '-4px -6px -6px',
+        borderRadius: '9px', border: 'none', background: 'transparent',
+      }}
+      onMouseEnter={event => { event.currentTarget.style.background = 'var(--dsw-surface-sunken, rgba(127,127,127,0.08))' }}
+      onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
+    >{body}</button>
+    <div style={{ fontSize: '10px', opacity: 0.45, marginTop: '4px' }}>{t('left.expandHint')}</div>
+    {expanded && <RelationDialog
+      relations={relations} center={center} t={t}
+      onClose={() => setExpanded(false)}
+    />}
   </div>
 }
 

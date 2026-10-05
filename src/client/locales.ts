@@ -26,6 +26,7 @@ export const zh = {
   'left.relationMissing': '（本子里没写）',
   'left.noRelations': '这本子没写人物关系。',
   'left.between': '彼此之间',
+  'left.expandHint': '点开看大图',
   'left.relations': '人物关系',
   'left.timeline': '时间线 · 你们说过的',
   'left.you': '你',
@@ -102,6 +103,7 @@ export const zh = {
 
   // 通用
   'common.cancel': '算了',
+  'common.close': '关闭',
   'common.loading': '载入中……',
 }
 
@@ -119,6 +121,7 @@ export const en = {
   'left.relationMissing': '(not written in this case)',
   'left.noRelations': 'This case does not describe any relations.',
   'left.between': 'Between them',
+  'left.expandHint': 'click to enlarge',
   'left.relations': 'Relations',
   'left.timeline': 'Timeline · what they said',
   'left.you': 'you',
@@ -189,5 +192,6 @@ export const en = {
   'set.addDir': '＋ Add a directory',
 
   'common.cancel': 'Cancel',
+  'common.close': 'Close',
   'common.loading': 'Loading…',
 }

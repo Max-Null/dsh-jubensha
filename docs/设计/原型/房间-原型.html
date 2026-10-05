@@ -307,25 +307,26 @@
       <!-- ③ 搜证 -->
       <div class="stage" data-s="search">
         <h2>搜证</h2>
-        <p class="lead">主持人一次性把线索发到桌上。每条都能引用到对话里——指着它问人，比复述一遍管用。</p>
+        <!-- 不做「引用到对话」按钮：DSH 本身就能选中复制，再挂一个入口既多余，又可能跟
+             「添加到会话」那类插件抢同一个位置（本机就装着一个）。 -->
+        <p class="lead">主持人一次性把线索发到桌上。要指着哪条问，选中文字复制过去就行——DSH 本来就能选、能复制。</p>
         <div class="card clue">
           <div class="top"><span class="tag">01</span><b class="title">暗房的门是从外面锁着的</b></div>
           <div class="body">挂锁锁在门外，钥匙还在柜台的钥匙盘上。</div>
-          <div class="acts"><button class="mini">引用到对话</button></div>
         </div>
         <div class="card clue">
           <div class="top"><span class="tag">02</span><b class="title">老周右手攥着半张湿了又干的底片</b></div>
           <div class="body">攥得很紧。底片从中间撕断，上面是个模糊的女人侧影。</div>
-          <div class="acts"><button class="mini">引用到对话</button></div>
         </div>
         <div class="card clue">
           <div class="top"><span class="tag">03</span><b class="title">柜台上的账本，最后一行</b></div>
           <div class="body">铅笔写的：「21:50 定金（丽）— 退」。旁边有擦改痕迹。</div>
-          <div class="acts"><button class="mini">引用到对话</button></div>
         </div>
       </div>
 
       <!-- ④ 发言投票 -->
+      <!-- 投票不做控件：**打字说就行了**（「我投马丽」）。一个下拉框只会把人从对话里拽出来，
+           而投票本来就是要说出口的东西——说了，别人才能反应。 -->
       <div class="stage" data-s="final">
         <h2>发言与投票</h2>
         <p class="lead">每人说一次「我怀疑谁、为什么」，然后投票。想清楚再投——投出去就定了。</p>
@@ -337,16 +338,13 @@
           <div class="top"><b>马丽</b></div>
           <div class="said">「我也投林默。他 21:45 才走，走的时候店里就他一个人。」</div>
         </div>
-        <h2 style="margin-top:16px">投票</h2>
-        <div class="vote">
-          <div class="row"><span class="who">陈建国</span><select><option>林默</option><option>马丽</option><option>苏小满</option></select></div>
-          <div class="row"><span class="who">马丽</span><select><option>林默</option><option>陈建国</option><option>苏小满</option></select></div>
-          <div class="row"><span class="who">苏小满</span><select><option>（还没投）</option><option>林默</option><option>马丽</option></select></div>
-          <div class="row"><span class="who"><b>你（林默）</b></span><select><option>（你还没投）</option><option>陈建国</option><option>马丽</option><option>苏小满</option></select></div>
+        <div class="card wait">
+          <div class="top"><b>苏小满</b><span class="tag">还没说</span></div>
+          <div class="said">——</div>
         </div>
-        <div class="tally">
-          <div><span class="bar" style="width:52px"></span>林默 2 票</div>
-          <div><span class="bar" style="width:0"></span>其余 0 票</div>
+        <div class="card">
+          <div class="top"><b>你（林默）</b><span class="tag">轮到你</span></div>
+          <div class="said">直接说「我投谁、为什么」就行——说了别人才能接话。</div>
         </div>
       </div>
 
@@ -387,9 +385,11 @@
         <div><div class="who">你（林默）</div><div class="bubble">我 21:45 走的，他当时站在柜台后面，店门还开着。</div></div></div>
       <div class="msg sys"><div class="bubble">马丽 正在输入……</div></div>
     </div>
+    <!-- 这一栏**只看不说**：说话用的是标签下面那个输入框，它就是对话页那一个。
+         另造一个不但重复，还会跟「添加到会话」那类插件抢同一个位置。 -->
     <div class="composer">
-      <div class="box">说点什么……</div>
-      <div class="hint">在这儿说话＝在对话页说话。两种形态共用同一局。</div>
+      <div class="hint"><b>说话在下面那个输入框里</b>——它就是对话页那一个，两种形态共用同一局。
+        这一栏只用来<b>看</b>桌上说了什么。</div>
     </div>
   </div>
 </div>

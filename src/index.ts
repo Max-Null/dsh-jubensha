@@ -21,7 +21,7 @@ import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { openActorPool } from './actor.ts'
 import type { Actor, ActorPool } from './actor.ts'
-import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, tableClues } from './case.ts'
+import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, sceneVictim, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
 import { listCases } from './cases.ts'
@@ -492,6 +492,22 @@ export function apply(ctx: Context): void {
   mountRoomApi(ctx, async (sessionId: string): Promise<RoomSnapshot> => {
     const actors = await requireActors(ctx).then(pool => pool.list())
     const game = games.get(sessionId)
+    // 死者、线索、剧本正文这三样要从本子读，而局面里只记了编号——按 caseId 找回来。
+    // 每次重读一遍是刻意的：这个回调每 4 秒被拉一次、本子就几十 KB，换来的是「改了本子
+    // 立刻生效」，不必去管一份缓存什么时候失效。
+    const loaded = game === undefined ? undefined : (() => {
+      const found = listCases().find(one => one.id === game.caseId)
+      if (found === undefined) return undefined
+      try {
+        return loadCase(readFileSync(found.path, 'utf8'))
+      } catch {
+        // 本子读不到了（被删、被改坏）：房间照常显示局面，只是少这三样。那不是该让
+        // 整份快照失败的事。
+        return undefined
+      }
+    })()
+    const dealt = new Set(game?.revealedClues ?? [])
+    const scriptRole = loaded?.roles.find(role => role.id === game?.humanSeat)
     // 只在「有没有局」这个结论变化时输出。端点每 4 秒被拉一次，无条件打会刷屏；
     // 而在排查「工具记的和标签查的不是同一个会话」时，这一行是外部唯一能对上号的地方。
     if (lastRoomHadGame !== (game !== undefined)) {
@@ -508,6 +524,14 @@ export function apply(ctx: Context): void {
         round: game.round,
         revealedClues: [...game.revealedClues],
         finished: isFinished(game),
+        victim: loaded === undefined ? null : sceneVictim(loaded),
+        // `tableClues(loaded, [])` 给本子的全部线索——它是线索的**唯一出口**，`supports`
+        // 在那儿被丢掉了，所以面板拿到的与牌桌上拿到的是同一种东西。
+        clues: loaded === undefined ? [] : tableClues(loaded, []).clues.map(clue => ({
+          ...clue,
+          dealt: dealt.has(clue.id),
+        })),
+        script: scriptRole === undefined ? '' : roleBook(scriptRole),
       },
       players: players.list().map(player => ({ seat: player.seat, name: player.name })),
       // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，

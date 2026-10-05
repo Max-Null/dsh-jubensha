@@ -59,7 +59,12 @@ export function listCases(): readonly CaseEntry[] {
         seats: loaded.roles.length,
         humanSeats: loaded.roles.filter(role => role.player === 'human').length,
         path: file,
-        roles: loaded.roles.map(role => ({ id: role.id, name: role.name, player: role.player })),
+        roles: loaded.roles.map(role => ({
+          id: role.id,
+          name: role.name,
+          player: role.player,
+          public: role.publicIdentity,
+        })),
       })
     } catch {
       // 坏本子跳过。`loadCase` 已经会为格式问题抛 `CaseFormatError`，

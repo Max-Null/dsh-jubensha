@@ -176,8 +176,42 @@ export function tableClues(
   return { clues, missing: ids.filter(id => !found.has(id)) }
 }
 
-/** ref 的前缀。`roleBook` 靠它分辨手里那串是引用还是正文。 */
-export const BOOK_REF_PREFIX = 'book:'
+/** 死者。 */
+export interface SceneVictim {
+  /** 名字。 */
+  readonly name: string
+  /** 年龄；本子里没写就是 0。 */
+  readonly age: number
+  /** 怎么死的。 */
+  readonly cause: string
+  /** 法医给的死亡时间窗。 */
+  readonly timeWindow: readonly string[]
+}
+
+/**
+ * 从本子里取死者。
+ *
+ * **宽容地取**：缺字段给空串、整个 `scene.victim` 缺失时给 `null`。本子格式在校验时已经管过
+ * 必填项，而这里是"显示用"的读法——一个可选的年龄没写，不该让房间页整块不显示。
+ * @param loaded - 加载好的本子。
+ * @returns 死者；本子没写时为 `null`。
+ */
+export function sceneVictim(loaded: LoadedCase): SceneVictim | null {
+  const victim = record(record(loaded.sections['scene'])['victim'])
+  const name = text(victim['name'])
+  if (name === '') return null
+  const window = victim['time_window']
+  return {
+    name,
+    age: typeof victim['age'] === 'number' ? victim['age'] : 0,
+    cause: text(victim['cause']),
+    timeWindow: Array.isArray(window)
+      ? window.filter((one): one is string => typeof one === 'string')
+      : [],
+  }
+}
+
+/** ref 的前缀。`roleBook` 靠它分辨手里那串是引用还是正文。 */export const BOOK_REF_PREFIX = 'book:'
 
 /**
  * 一个座位的角色本封存引用。

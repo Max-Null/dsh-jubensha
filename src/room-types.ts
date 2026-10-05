@@ -11,6 +11,35 @@
  * @module @max-null/dsh-jubensha/room-types
  */
 
+/** 死者。 */
+export interface RoomVictim {
+  /** 名字。 */
+  readonly name: string
+  /** 年龄。 */
+  readonly age: number
+  /** 怎么死的。 */
+  readonly cause: string
+  /** 法医给的死亡时间窗。 */
+  readonly timeWindow: readonly string[]
+}
+
+/**
+ * 一条线索，以及它**发到桌上没有**。
+ *
+ * 未发的那条也带着全文——**这不是泄漏**：DM 已经读过它了，而这一栏不给玩家的眼睛加锁
+ * （他本来就能在对话里问）。`dealt` 是给界面用的：未发的显示成背面，那一眼就是「还差几条」。
+ */
+export interface RoomClue {
+  /** 线索 id。 */
+  readonly id: string
+  /** 标题。 */
+  readonly title: string
+  /** 原文——发到桌上时给的那一段。 */
+  readonly text: string
+  /** 已经发到桌上了吗。 */
+  readonly dealt: boolean
+}
+
 /** 面板要显示的一局。 */
 export interface RoomGame {
   /** 本子编号。 */
@@ -29,6 +58,12 @@ export interface RoomGame {
   readonly revealedClues: readonly string[]
   /** 是不是已经到复盘了。 */
   readonly finished: boolean
+  /** 死者；本子没写全时为 `null`。 */
+  readonly victim: RoomVictim | null
+  /** 本子的线索，带「发了没有」。 */
+  readonly clues: readonly RoomClue[]
+  /** 真人那位拿到的角色本正文——**回看用**，与开局时发给他的那份是同一份。 */
+  readonly script: string
 }
 
 /** 桌上的一位 AI 玩家。 */
@@ -61,6 +96,12 @@ export interface RoomCaseRole {
   readonly name: string
   /** 归真人还是 AI。 */
   readonly player: 'human' | 'ai'
+  /**
+   * 这个人摆在明面上的身份——左栏列人时显示的就是它。
+   *
+   * 它**不是秘密**：秘密在角色本里（本子的 `roles[].private`），而这一句是开局就说给全桌的。
+   */
+  readonly public: string
 }
 
 /** 一个能选的本子。 */

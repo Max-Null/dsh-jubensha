@@ -20,10 +20,10 @@ const ENTRY: RoomCase = {
   humanSeats: 1,
   path: 'H:/cases/01-拾光照相馆/case.yml',
   roles: [
-    { id: 'p0', name: '林默', player: 'human' },
-    { id: 'p1', name: '陈建国', player: 'ai' },
-    { id: 'p2', name: '马丽', player: 'ai' },
-    { id: 'p3', name: '苏小满', player: 'ai' },
+    { id: 'p0', name: '林默', player: 'human', public: '32 岁，周德明的侄子。' },
+    { id: 'p1', name: '陈建国', player: 'ai', public: '61 岁，退休邮递员。' },
+    { id: 'p2', name: '马丽', player: 'ai', public: '41 岁，做老照片生意。' },
+    { id: 'p3', name: '苏小满', player: 'ai', public: '24 岁，老周的学徒。' },
   ],
 }
 

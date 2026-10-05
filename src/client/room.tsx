@@ -23,6 +23,28 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RoomCase, RoomCaseRelation, RoomSnapshot } from '../room-types.ts'
 import { avatarSvg } from '../avatar.ts'
 import { openingInstruction } from '../instruction.ts'
+import type { SaidLine } from './said.ts'
+
+/**
+ * 哪些来源不属于「桌上说的话」。
+ *
+ * 右栏要的是人在桌上说的，而同一个通道里还流着上下文注入、技能目录、别的插件的通知——它们
+ * 都是 `source.kind` 上带着来源标签的。这一串是**实测见到的注入类**（见界面设计 §5.3）。
+ *
+ * 用**排除法**而不是白名单：AI 玩家那条路的 `source.kind` 还没实测到（见 §5.3 末尾），排除了
+ * 已知的注入，剩下的就都算"人说的"——宁可多显示一句，也别让玩家的发言被静默吃掉。
+ */
+const INJECTED_KINDS = new Set([
+  'runtime-context',
+  'agent-instructions',
+  'skill-catalog',
+  'time-context',
+])
+
+/** 这条是不是「桌上说的话」。 */
+function isSaid(line: SaidLine): boolean {
+  return !INJECTED_KINDS.has(line.from) && !line.from.startsWith('plugin:')
+}
 
 type Locale = PropsLocale<'jubensha'>
 
@@ -242,7 +264,7 @@ function MidColumn({
       : null}
 
     {phase === 'inquiry'
-      ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('right.pending')}</div></Card>
+      ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('mid.pending')}</div></Card>
       : null}
 
     {phase === 'search'
@@ -258,7 +280,7 @@ function MidColumn({
       : null}
 
     {phase === 'final' || phase === 'reveal'
-      ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('right.pending')}</div></Card>
+      ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('mid.pending')}</div></Card>
       : null}
   </div>
 }
@@ -347,16 +369,28 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
 
 /**
  * 右栏：桌上说了什么。
- * @param props - 本地化文案。
+ * @param props - 本地化文案与已经读到的那些话。
  * @returns 消息流那一栏。
  */
-function RightColumn({ t }: Locale) {
+function RightColumn({ t, said }: Locale & { said: readonly SaidLine[] }) {
+  const lines = said.filter(isSaid)
   return <div style={{ padding: '14px 16px' }}>
     <Heading>{t('right.said')}</Heading>
-    {/* 消息流要从会话里读，而 `conversation.view` 的 owner props 里没有消息
-        （只有 inspectCall / viewRequest / openView）。那条路还没选：conversation node
-        还是 useSession——见界面设计 §5。先明说它没接，不画一个空的消息流。 */}
-    <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>{t('right.pending')}</div>
+    {lines.length === 0
+      ? <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>{t('right.empty')}</div>
+      : <div style={{ marginBottom: '10px' }}>
+        {lines.map((line, index) => <div key={`${line.seq}-${index}`} style={{
+          padding: '5px 0',
+          borderBottom: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.16))',
+        }}>
+          <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '2px' }}>
+            {line.from === 'user' ? t('right.you') : line.from}
+          </div>
+          <div style={{ fontSize: '12.5px', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {line.text}
+          </div>
+        </div>)}
+      </div>}
     <div style={{ borderTop: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))', paddingTop: '10px' }}>
       <div style={{ fontSize: '11.5px', opacity: 0.65 }}>{t('right.composer')}</div>
     </div>
@@ -372,8 +406,8 @@ function RightColumn({ t }: Locale) {
  * @returns 三栏。
  */
 export function RoomView({
-  snapshot, t, notes,
-}: Locale & { snapshot: RoomSnapshot; notes: React.ReactNode }) {
+  snapshot, t, said, notes,
+}: Locale & { snapshot: RoomSnapshot; said: readonly SaidLine[]; notes: React.ReactNode }) {
   const [phase, setPhase] = useState<Phase>(
     PHASES.includes(snapshot.game?.phase as Phase) ? snapshot.game?.phase as Phase : 'self-intro',
   )
@@ -410,7 +444,7 @@ export function RoomView({
           : <MidColumn snapshot={snapshot} phase={phase} t={t} />}
       </div>
       <div style={{ borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))' }}>
-        <RightColumn t={t} />
+        <RightColumn t={t} said={said} />
       </div>
     </div>
 

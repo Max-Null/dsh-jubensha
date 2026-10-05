@@ -18,7 +18,7 @@
  * @module @max-null/dsh-jubensha/client/said
  */
 import type { ConversationNodeDefinition } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChatNode } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { ChatNode, ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 
 /** 投影的名字。读它时用同一个字符串。 */
 export const SAID_KIND = 'jubensha-said'
@@ -122,4 +122,33 @@ export const saidDefinition: ConversationNodeDefinition<SaidBatch> = {
       data: context.state,
     } satisfies ChatNode<typeof SAID_KIND>
   },
+}
+
+/**
+ * 右栏一次显示多少句。
+ *
+ * 右栏是"桌上说了什么"，不是全部历史——一局打下来几百句，全铺出来没人看。
+ */
+export const SAID_LIMIT = 40
+
+/**
+ * 从会话快照里读「谁说了什么」。
+ *
+ * 两跳：`navigation.items()` 给出**加载过的每一轮**（按时间序），再逐轮用
+ * `nodes.turnDataSource(turn, kind)` 取这一类 node 的数据。拿不到快照时给空数组——房间页那侧
+ * 已经在轮询，这一格空着比整页报错好。
+ *
+ * **只留最后 `SAID_LIMIT` 句**：桌上说的话是越近越要看。
+ * @param snapshot - Chat 目标的快照；目标还没就绪时给 `undefined`。
+ * @returns 按时间序的句子，最多 `SAID_LIMIT` 条。
+ */
+export function readSaid(snapshot: ChatSnapshot | undefined): SaidLine[] {
+  if (snapshot === undefined) return []
+  const lines: SaidLine[] = []
+  for (const item of snapshot.navigation.items()) {
+    for (const batch of snapshot.nodes.turnDataSource(item.turn, SAID_KIND).getSnapshot()) {
+      lines.push(...batch.lines)
+    }
+  }
+  return lines.length > SAID_LIMIT ? lines.slice(lines.length - SAID_LIMIT) : lines
 }

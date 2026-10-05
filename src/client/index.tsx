@@ -29,12 +29,13 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// 声明合并 `ctx.uiConversation`：它的 `binding(sessionId)` 是读 Chat 目标的那一跳。
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { RoomSnapshot } from '../room-types.ts'
 import { RoomView } from './room.tsx'
 import { NoteLayer } from './notes.tsx'
-import { saidDefinition } from './said.ts'
+import { saidDefinition, readSaid, type SaidLine } from './said.ts'
 import { SettingsTab } from './settings.tsx'
 import { en, zh } from './locales.ts'
 
@@ -45,15 +46,22 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-/** 需要的服务：`locale` 注册文案，`slots` 挂标签，`uiConversation` 注册会话事件的投影。 */
-export const inject = ['locale', 'slots', 'uiConversation']
+/** 需要的服务：`locale` 注册文案，`slots` 挂标签，`sessions` 找会话绑定，`uiConversation` 读投影。 */
+export const inject = ['locale', 'slots', 'sessions', 'uiConversation']
 
 type Locale = PropsLocale<'jubensha'>
 
-/** 视图注入面——只有一件事：谁在看我。 */
+/** 视图注入面——两件事：谁在看我，以及怎么读到桌上说了什么。 */
 export interface RoomInjected {
   /** 这个标签属于哪个会话。快照按它取，因为局面是每个会话各自一局。 */
   sessionId: string
+  /**
+   * 桌上说了什么。
+   *
+   * **是回调不是数据**：`inject` 在每个标签注册时算一次，而这个值随会话推进一直在变。房间页那边
+   * 每 4 秒拉一次快照，于是每次渲染调它拿到的都是当下的。
+   */
+  readSaid: () => SaidLine[]
 }
 
 /**
@@ -70,7 +78,9 @@ const POLL_MS = 4000
  * @param props - 本地化文案与注入面（谁在看我）。
  * @returns 三栏 + 便签层。
  */
-export function TeamView({ t, sessionId }: PropsRuntime<'conversation.view'> & Locale & InjectFace<RoomInjected>) {
+export function TeamView({
+  t, sessionId, readSaid,
+}: PropsRuntime<'conversation.view'> & Locale & InjectFace<RoomInjected>) {
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   /** 便签改过之后加一，让那个 effect 重跑一次——比手写一份本地便签副本少一处会不同步的状态。 */
@@ -112,6 +122,7 @@ export function TeamView({ t, sessionId }: PropsRuntime<'conversation.view'> & L
       : null}
     <RoomView
       snapshot={snapshot}
+      said={readSaid()}
       t={t}
       notes={<NoteLayer
         t={t}
@@ -140,8 +151,13 @@ export function apply(ctx: Context): void {
     order: 20,
     locale: 'jubensha',
     label: () => ctx.locale.bind('jubensha')('view.team'),
-    // 谁在看我——快照按这个 id 取。
-    inject: (sessionId: string): RoomInjected => ({ sessionId }),
+    // 谁在看我——快照按这个 id 取。而「桌上说了什么」从这里读：Chat 目标 → 快照。
+    // `binding` 直接收 SessionId，不必先经 `ctx.sessions`（那在客户端半边会撞上宿主的同名声明，
+    // 见界面设计 §5.4）。
+    inject: (sessionId: string): RoomInjected => {
+      const chat = ctx.uiConversation.binding(sessionId).target('chat')
+      return { sessionId, readSaid: () => readSaid(chat.getSnapshot()) }
+    },
   }, TeamView))
   // 设置页。挂 `settings.plugins.tab` 而**不是** `settings.section`：功能插件不占左边那列导航，
   // 只往「插件」那一栏贡献一个页面——所以它出现在「设置 → 插件 → 剧本杀」。

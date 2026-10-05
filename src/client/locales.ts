@@ -34,13 +34,15 @@ export const zh = {
   'mid.scriptHint': '（点这儿收起回看）',
   'mid.clues': '线索',
   'mid.cases': '可选的本子',
+  'mid.pending': '这一页的内容要从对话里来，还没接上——右栏已经在读了。',
   'mid.clueSealed': '（还没发到桌上）',
   'mid.noGame': '还没开局。在对话里让主持人开一局，这里就会显示局面。',
 
   // 右栏
   'right.said': '桌上说了什么',
   'right.composer': '说话在下面那个输入框里——它就是对话页那一个，两种形态共用同一局。',
-  'right.pending': '这一栏的消息流还没接上：它要从会话里读，而那条路还在选（conversation node 还是 useSession）。',
+  'right.empty': '还没人说话。开一局之后，桌上说的话会一条条出现在这儿。',
+  'right.you': '你',
 
   // 阶段页各自的抬头与引导
   'intro.title': '逐个上桌',
@@ -115,12 +117,14 @@ export const en = {
   'mid.scriptHint': '(click to collapse)',
   'mid.clues': 'Clues',
   'mid.cases': 'Cases',
+  'mid.pending': 'This page reads from the conversation — not wired up yet. The right column already is.',
   'mid.clueSealed': '(not dealt yet)',
   'mid.noGame': 'No game yet. Ask the host in the conversation to start one, and the table shows up here.',
 
   'right.said': 'What was said',
   'right.composer': 'You speak in the composer below — the same one the conversation page uses. Both share one game.',
-  'right.pending': 'The feed here is not wired up yet: it has to read from the session, and that route is still being chosen (conversation node vs useSession).',
+  'right.empty': 'Nobody has spoken yet. Once a game starts, what is said at the table shows up here.',
+  'right.you': 'You',
 
   'intro.title': 'Taking seats',
   'intro.lead': 'Each player starts with what they did last night. The host brings them to the table one by one.',

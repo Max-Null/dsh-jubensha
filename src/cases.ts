@@ -33,44 +33,53 @@ function casesRoot(): string {
 /**
  * 列出能选的本子，按编号排序。
  *
- * 读不到的、解析不了的都跳过——原因是「这儿多一行少一行」不值得让整张表失败。
- * @returns 本子列表；目录不存在时给空数组。
+ * 两个来源扫的是同一套逻辑，只是根不同：**插件自带的那份**（随包发，永远在）与**用户指的
+ * 那几个目录**（见 `case-dirs.ts`）。同一个本子被两个目录都扫到时只留一份——按 id 判，
+ * 那是它的身份。
+ *
+ * 读不到的、解析不了的都跳过——「这儿多一行少一行」不值得让整张表失败。
+ * @param extraDirs - 额外要扫的目录；默认没有。
+ * @returns 本子列表；一个目录都读不到时给空数组。
  */
-export function listCases(): readonly CaseEntry[] {
-  const root = casesRoot()
-  let entries: string[]
-  try {
-    entries = readdirSync(root)
-  } catch {
-    // 目录不在（比如装的时候没带上 cases/）——列表空着，面板会说"没有可选的本子"。
-    // 这个 catch 只包住 readdir 那一句：后面每本本子的失败各有各的处置，不归它管。
-    return []
-  }
+export function listCases(extraDirs: readonly string[] = []): readonly CaseEntry[] {
   const found: CaseEntry[] = []
-  for (const entry of entries) {
-    const file = join(root, entry, 'case.yml')
+  const seen = new Set<string>()
+  for (const root of [casesRoot(), ...extraDirs]) {
+    let entries: string[]
     try {
-      if (!statSync(file).isFile()) continue
-      const loaded = loadCase(readFileSync(file, 'utf8'))
-      found.push({
-        id: loaded.id,
-        title: loaded.title,
-        genre: loaded.genre,
-        seats: loaded.roles.length,
-        humanSeats: loaded.roles.filter(role => role.player === 'human').length,
-        path: file,
-        roles: loaded.roles.map(role => ({
-          id: role.id,
-          name: role.name,
-          player: role.player,
-          public: role.publicIdentity,
-        })),
-        relations: sceneRelations(loaded).map(one => ({ ...one })),
-      })
+      entries = readdirSync(root)
     } catch {
-      // 坏本子跳过。`loadCase` 已经会为格式问题抛 `CaseFormatError`，
-      // 而"面板上少一行"是这里唯一合适的处置——它不是个该让人修到能跑的错误。
+      // 这个目录不在（装的时候没带上 cases/，或者用户删了自指的目录）——跳过它，
+      // 继续扫下一个。一个目录读不到不该让整张表空掉。
       continue
+    }
+    for (const entry of entries) {
+      const file = join(root, entry, 'case.yml')
+      try {
+        if (!statSync(file).isFile()) continue
+        const loaded = loadCase(readFileSync(file, 'utf8'))
+        if (seen.has(loaded.id)) continue
+        seen.add(loaded.id)
+        found.push({
+          id: loaded.id,
+          title: loaded.title,
+          genre: loaded.genre,
+          seats: loaded.roles.length,
+          humanSeats: loaded.roles.filter(role => role.player === 'human').length,
+          path: file,
+          roles: loaded.roles.map(role => ({
+            id: role.id,
+            name: role.name,
+            player: role.player,
+            public: role.publicIdentity,
+          })),
+          relations: sceneRelations(loaded).map(one => ({ ...one })),
+        })
+      } catch {
+        // 坏本子跳过。`loadCase` 已经会为格式问题抛 `CaseFormatError`，
+        // 而"面板上少一行"是这里唯一合适的处置——它不是个该让人修到能跑的错误。
+        continue
+      }
     }
   }
   return found.sort((left, right) => left.id.localeCompare(right.id))

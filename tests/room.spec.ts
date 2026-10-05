@@ -9,7 +9,7 @@
  * fence」），本插件按跨插件不许运行时互相 import 的规矩复制了那份逻辑。
  */
 import { describe, expect, it } from 'vitest'
-import { actorAction, isTrusted, noteAction, subAction } from '../src/room.ts'
+import { actorAction, caseDirAction, isTrusted, noteAction, subAction } from '../src/room.ts'
 
 /** 一次正常的面板请求：浏览器同源、Host 是本机。 */
 function local(extra: Record<string, string> = {}): Record<string, string> {
@@ -105,5 +105,15 @@ describe('写端点的路径解析', () => {
   it('前缀要整段匹配——/jubensha/actorx 不是 /jubensha/actor', () => {
     expect(subAction('/jubensha/actorx/add', '/jubensha/actor')).toBeUndefined()
     expect(subAction('/jubensha/actor/add', '/jubensha/actor')).toBe('add')
+  })
+
+  it('本子目录那个端点也认得出，三个端点互不认领', () => {
+    expect(caseDirAction('/jubensha/case-dirs/add')).toBe('add')
+    expect(caseDirAction('/jubensha/case-dirs/remove')).toBe('remove')
+    // 三个前缀只差几个词，认错一个就会拿演员池的动作去打便签池。这条盯的就是那个。
+    expect(caseDirAction('/jubensha/actor/add')).toBeUndefined()
+    expect(caseDirAction('/jubensha/note/add')).toBeUndefined()
+    expect(caseDirAction('/jubensha/case')).toBeUndefined()
+    expect(noteAction('/jubensha/case-dirs/add')).toBeUndefined()
   })
 })

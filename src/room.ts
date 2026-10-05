@@ -443,3 +443,90 @@ export function mountNoteApi(ctx: Context, pool: () => Promise<NoteWriter>): voi
     },
   }), '@max-null/dsh-jubensha: /jubensha/note')
 }
+
+/** 本子目录这份配置要能干的事——只取设置页用得上的那三件。 */
+export interface CaseDirWriter {
+  /** 现在要扫哪些额外目录。 */
+  list(): readonly string[]
+  /** 加一个（幂等）。 */
+  add(dir: string): Promise<readonly string[]>
+  /** 去掉一个。 */
+  remove(dir: string): Promise<readonly string[]>
+}
+
+/**
+ * 从本子目录端点的路径里取出动作名。
+ * @param pathname - 请求路径。
+ * @returns 动作名；不属于这个端点时给 `undefined`。
+ */
+export function caseDirAction(pathname: string): string | undefined {
+  return subAction(pathname, '/jubensha/case-dirs')
+}
+
+/**
+ * 挂 `/jubensha/case-dirs`（GET 读 / POST 写）。
+ *
+ * **为什么它没有 `?session=`**：这份配置是**这台机器上的这个人**的，与哪一局无关——与演员池
+ * 一样，跟房间快照那条不同。
+ * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
+ * @param pool - 取配置；由调用方决定什么时候开它。
+ */
+export function mountCaseDirApi(ctx: Context, pool: () => Promise<CaseDirWriter>): void {
+  const services = ctx as unknown as {
+    webServer: {
+      register(descriptor: {
+        kind: string
+        path: string
+        handler: (req: unknown, res: unknown) => Promise<void> | void
+      }): () => void
+    }
+    webRuntime: { trustedHosts: readonly string[] }
+  }
+
+  ctx.effect(() => services.webServer.register({
+    kind: 'prefix',
+    path: '/jubensha/case-dirs',
+    handler: async (req: unknown, res: unknown) => {
+      const request = req as { headers: RequestHeaders, method?: string, url?: string }
+      if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
+        writeJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      const method = request.method ?? 'GET'
+      if (method === 'GET') {
+        try {
+          writeJson(res, 200, { ok: true, value: (await pool()).list() })
+        } catch (error: unknown) {
+          writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+        return
+      }
+      if (method !== 'POST') {
+        writeJson(res, 405, { ok: false, error: 'method-error' })
+        return
+      }
+      const action = caseDirAction(new URL(request.url ?? '/', 'http://dsh.internal').pathname)
+      if (action === undefined) {
+        writeJson(res, 404, { ok: false, error: 'not-found' })
+        return
+      }
+      try {
+        const body = await readJsonBody(req)
+        const dir = need(body, 'dir')
+        const dirs = await pool()
+        let value: readonly string[]
+        switch (action) {
+          case 'add': value = await dirs.add(dir); break
+          case 'remove': value = await dirs.remove(dir); break
+          default: {
+            writeJson(res, 404, { ok: false, error: 'not-found' })
+            return
+          }
+        }
+        writeJson(res, 200, { ok: true, value })
+      } catch (error: unknown) {
+        writeJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    },
+  }), '@max-null/dsh-jubensha: /jubensha/case-dirs')
+}

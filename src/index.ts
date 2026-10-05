@@ -25,9 +25,11 @@ import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBook
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
 import { listCases } from './cases.ts'
+import { openCaseDirPool } from './case-dirs.ts'
+import type { CaseDirPool } from './case-dirs.ts'
 import { openNotePool } from './notes.ts'
 import type { NotePool } from './notes.ts'
-import { mountActorApi, mountNoteApi, mountRoomApi } from './room.ts'
+import { mountActorApi, mountCaseDirApi, mountNoteApi, mountRoomApi } from './room.ts'
 import type { RoomSnapshot } from './room.ts'
 import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
@@ -124,6 +126,21 @@ let boards: Promise<NotePool> | undefined
 function requireNotes(ctx: Context): Promise<NotePool> {
   boards ??= openNotePool(ctx)
   return boards
+}
+
+/**
+ * 本子目录这份配置。第三个域——它的生命周期又是另一种：这台机器上的这个人的一小份配置。
+ */
+let caseDirs: Promise<CaseDirPool> | undefined
+
+/**
+ * 取本子目录配置。
+ * @param ctx - 插件上下文。
+ * @returns 打开好的配置池。
+ */
+function requireCaseDirs(ctx: Context): Promise<CaseDirPool> {
+  caseDirs ??= openCaseDirPool(ctx)
+  return caseDirs
 }
 
 /**
@@ -536,7 +553,7 @@ export function apply(ctx: Context): void {
       players: players.list().map(player => ({ seat: player.seat, name: player.name })),
       // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，
       // 收益不抵。四本本子的 YAML 解析是毫秒级的事。
-      cases: [...listCases()],
+      cases: [...listCases((await requireCaseDirs(ctx)).list())],
       // 便签跟着快照一起来：面板拉一次就有全部。`board()` 给的就是一份拷贝（域里那份是活的）。
       notes: (await requireNotes(ctx)).board(sessionId).notes,
       actors: actors.map(actor => ({
@@ -554,6 +571,8 @@ export function apply(ctx: Context): void {
   // 便签要**留下来**：它得跟着会话活，切走再回来还在。排座不用端点，正因为那是临时的
   // ——排完发出去、关掉就该忘；便签不是。
   mountNoteApi(ctx, () => requireNotes(ctx))
+  // 本子来源。它**不需要会话**——那份配置跟着这台机器上的人走，与哪一局无关。
+  mountCaseDirApi(ctx, () => requireCaseDirs(ctx))
   ctx.tools.register(defineTool({
     name: STATE_TOOL,
     description: describeTool(),

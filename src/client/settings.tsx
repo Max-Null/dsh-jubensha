@@ -40,6 +40,26 @@ async function listActors(): Promise<RoomActor[]> {
   return parsed.value
 }
 
+/** 读本子目录这份配置。也不需要会话——它跟着这台机器上的人走。 */
+async function listCaseDirs(): Promise<string[]> {
+  const response = await fetch('/jubensha/case-dirs')
+  const parsed = await response.json() as { ok?: boolean, value?: string[], error?: string }
+  if (parsed.ok !== true || parsed.value === undefined) throw new Error(parsed.error ?? `HTTP ${response.status}`)
+  return parsed.value
+}
+
+/** 加一个本子目录，或者去掉一个。 */
+async function writeCaseDir(action: 'add' | 'remove', dir: string): Promise<string[]> {
+  const response = await fetch(`/jubensha/case-dirs/${action}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ dir }),
+  })
+  const parsed = await response.json() as { ok?: boolean, value?: string[], error?: string }
+  if (parsed.ok !== true || parsed.value === undefined) throw new Error(parsed.error ?? `HTTP ${response.status}`)
+  return parsed.value
+}
+
 /** 一行小标题。 */
 function Heading({ children }: { children: string }) {
   return <h3 style={{ fontSize: '13px', margin: '0 0 4px', fontWeight: 600 }}>{children}</h3>
@@ -192,14 +212,17 @@ function Actors({ actors, reload, onProblem, t }: Locale & {
  */
 export function SettingsTab({ t }: Locale) {
   const [actors, setActors] = useState<RoomActor[] | null>(null)
+  const [dirs, setDirs] = useState<string[] | null>(null)
+  const [draft, setDraft] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
     let cancelled = false
-    void listActors().then((list) => {
+    void Promise.all([listActors(), listCaseDirs()]).then(([list, extra]) => {
       if (!cancelled) {
         setActors(list)
+        setDirs(extra)
         setProblem(null)
       }
     }).catch((cause: unknown) => {
@@ -209,6 +232,17 @@ export function SettingsTab({ t }: Locale) {
   }, [nonce])
 
   const reload = (): void => setNonce(one => one + 1)
+  const touchDir = async (action: 'add' | 'remove', dir: string): Promise<void> => {
+    try {
+      setDirs(await writeCaseDir(action, dir))
+      setDraft('')
+      // 加/去一个目录会改变可选本子，所以连快照那侧也要重读——那是下一轮的事，
+      // 这里先把这份配置本身保持正确。
+      reload()
+    } catch (cause: unknown) {
+      setProblem(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
 
   return <div style={{ padding: '20px 24px 40px', fontSize: '13px', lineHeight: 1.6, maxWidth: '760px' }}>
     <h2 style={{ fontSize: '16px', margin: '0 0 4px', fontWeight: 600 }}>{t('set.title')}</h2>
@@ -226,9 +260,63 @@ export function SettingsTab({ t }: Locale) {
 
     <section>
       <Heading>{t('set.cases')}</Heading>
-      {/* 本子来源这一块**只显示插件自带的那份**：自定义目录要一个「面板该扫哪些目录」的配置，
-          那是宿主侧的新东西（界面设计 §5 第 4 条）。明说它没接，不画一个加不动的"加目录"。 */}
-      <div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('set.casesPending')}</div>
+      <p style={{ opacity: 0.7, fontSize: '12px', margin: '0 0 10px' }}>{t('set.casesLead')}</p>
+      {/* 插件自带的那一份永远在，而且不该能被去掉——它是随包发的。 */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0',
+        borderBottom: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+        fontSize: '12.5px',
+      }}>
+        <span style={{
+          fontSize: '11px', opacity: 0.7, border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+          borderRadius: '5px', padding: '0 5px',
+        }}>{t('set.bundled')}</span>
+        <span style={{ flex: 1, fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '11.5px', opacity: 0.75 }}>
+          cases/
+        </span>
+      </div>
+
+      {(dirs ?? []).map(dir => <div key={dir} style={{
+        display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0',
+        borderBottom: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+        fontSize: '12.5px',
+      }}>
+        <span style={{
+          fontSize: '11px', opacity: 0.7, border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+          borderRadius: '5px', padding: '0 5px',
+        }}>{t('set.mine')}</span>
+        <span style={{ flex: 1, fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '11.5px', opacity: 0.75, wordBreak: 'break-all' }}>
+          {dir}
+        </span>
+        <button
+          type="button"
+          onClick={() => void touchDir('remove', dir)}
+          style={{ font: 'inherit', fontSize: '12px', padding: '3px 9px', borderRadius: '7px', border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))', background: 'transparent', color: 'inherit', cursor: 'pointer' }}
+        >{t('set.dropDir')}</button>
+      </div>)}
+
+      <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+        <input
+          style={{ ...inputStyle, flex: 1 }}
+          placeholder={t('set.dirPlaceholder')}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && draft.trim() !== '') void touchDir('add', draft.trim())
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            if (draft.trim() === '') {
+              setProblem(t('set.needDir'))
+              return
+            }
+            void touchDir('add', draft.trim())
+          }}
+          style={{ font: 'inherit', fontSize: '12px', padding: '4px 12px', borderRadius: '7px', border: '1px solid var(--dsw-accent, #4a7fd4)', background: 'transparent', color: 'var(--dsw-accent, #4a7fd4)', cursor: 'pointer' }}
+        >{t('set.addDir')}</button>
+      </div>
     </section>
   </div>
 }

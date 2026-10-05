@@ -41,8 +41,18 @@
   .phase.viewing { background: var(--sunken); color: var(--fg); }
   .phase + .phase::before { content: ""; width: 20px; height: 1px; background: var(--line); margin: 0 8px; }
 
-  /* ── 三栏：左窄 · 中限宽好读 · 右够放消息 ─────────────── */
-  .columns { display: grid; grid-template-columns: 286px minmax(0,1fr) 366px; height: calc(100vh - 98px); }
+  /* 便签层挂在这上面（position: absolute），所以坐标是相对这个容器的——
+     标签一切走，容器整个消失，便签跟着走；切回来还是同一套坐标，位置不变。 */
+  .columns { position: relative; display: grid; grid-template-columns: 286px minmax(0,1fr) 366px; height: calc(100vh - 134px); }
+  .columns.off { display: none; }
+
+  /* 顶上那一排标签是 DSH 的，不是这个插件的——这儿只画出来，好把「便签归谁管」演示清楚。 */
+  .tabbar { display: flex; gap: 4px; padding: 8px 20px 0; border-bottom: 1px solid var(--line); }
+  .tabbar span { font-size: 12.5px; color: var(--muted); padding: 4px 10px 6px; cursor: pointer; border-radius: 7px 7px 0 0; }
+  .tabbar span:hover { background: var(--sunken); }
+  .tabbar span.on { color: var(--fg); font-weight: 600; border-bottom: 2px solid var(--accent); }
+  .elsewhere { display: none; padding: 40px 20px; color: var(--muted); font-size: 12.5px; }
+  .elsewhere.on { display: block; }
   @media (max-width: 1180px) { .columns { grid-template-columns: 250px minmax(0,1fr) 300px; } }
   .col { min-height: 0; overflow-y: auto; }
   .col + .col { border-left: 1px solid var(--line); }
@@ -128,10 +138,10 @@
   .composer .box { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; color: var(--muted); font-size: 12px; }
   .hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
 
-  /* ── 便签：右键任意位置，八色，自增序号 ───────────────── */
+  /* ── 便签：只属于「团队」这个标签，九色（含白底——白底在这儿最隐蔽） ── */
   .note {
-    position: fixed; width: 170px; border-radius: 8px; padding: 16px 10px 20px;
-    font-size: 12px; line-height: 1.55; box-shadow: 0 6px 18px rgba(0,0,0,.18);
+    position: absolute; width: 170px; border-radius: 8px; padding: 16px 10px 20px;
+    font-size: 12px; line-height: 1.55; box-shadow: 0 4px 14px rgba(0,0,0,.13);
     outline: none; z-index: 20; color: #23231f;
   }
   .note .seq {
@@ -140,6 +150,7 @@
   }
   .note .kill { position: absolute; right: 6px; bottom: 3px; cursor: pointer; opacity: .45; font-size: 11px; }
   .note .kill:hover { opacity: .9; }
+  .note[data-c="white"] { background: #fffefb; border: 1px solid rgba(0,0,0,.10); }
   .note[data-c="amber"]  { background: #ffe9a8; }
   .note[data-c="green"]  { background: #cdead0; }
   .note[data-c="blue"]   { background: #cfe4f7; }
@@ -152,7 +163,7 @@
     position: fixed; z-index: 30; background: var(--bg); border: 1px solid var(--line);
     border-radius: 9px; padding: 6px; box-shadow: 0 8px 22px rgba(0,0,0,.18); display: none;
   }
-  .menu .grid { display: grid; grid-template-columns: repeat(4, 22px); gap: 6px; }
+  .menu .grid { display: grid; grid-template-columns: repeat(3, 24px); gap: 6px; }
   .menu .sw { width: 22px; height: 22px; border-radius: 6px; cursor: pointer; border: 1px solid rgba(0,0,0,.12); }
   .menu .sw:hover { transform: scale(1.08); }
   .menu .tip { font-size: 11px; color: var(--muted); margin: 6px 2px 2px; }
@@ -165,6 +176,16 @@
 </style>
 </head>
 <body>
+
+<!-- 这一排是 DSH 的标签栏，不是插件画的。放这儿是为了把层级交代清楚：
+     便签**只属于「团队」**——切到别的标签，它跟着这一页一起消失。 -->
+<div class="tabbar" id="tabbar">
+  <span data-v="chat">对话</span>
+  <span data-v="trajectory">轨迹</span>
+  <span class="on" data-v="team">团队</span>
+  <span data-v="context">上下文</span>
+</div>
+<div class="elsewhere" id="elsewhere">这是别的标签页。（便签不在这儿——它只属于「团队」。）</div>
 
 <header>
   <h1>拾光照相馆</h1>
@@ -400,6 +421,7 @@
 
 <div class="menu" id="menu">
   <div class="grid">
+    <span class="sw" data-c="white"  style="background:#fffefb; box-shadow: inset 0 0 0 1px rgba(0,0,0,.14)"></span>
     <span class="sw" data-c="amber"  style="background:#ffe9a8"></span>
     <span class="sw" data-c="green"  style="background:#cdead0"></span>
     <span class="sw" data-c="blue"   style="background:#cfe4f7"></span>
@@ -414,6 +436,21 @@
 <div class="toast" id="toast"></div>
 
 <script>
+/**
+ * 标签切换：切走时**整页连同便签一起消失**——便签归「团队」这一页管，不该飘到对话页上去。
+ * 正式实现里这一层由 `conversation.view` 的槽负责：槽里的组件卸载，它渲染的东西就没了。
+ */
+const tabbar = document.getElementById('tabbar')
+tabbar.addEventListener('click', (event) => {
+  const hit = event.target.closest('span')
+  if (hit === null) return
+  const team = hit.dataset.v === 'team'
+  for (const one of tabbar.querySelectorAll('span')) one.classList.toggle('on', one === hit)
+  document.querySelector('.columns').classList.toggle('off', !team)
+  document.querySelector('header').style.display = team ? '' : 'none'
+  document.getElementById('elsewhere').classList.toggle('on', !team)
+})
+
 /** 阶段切换：点顶部阶段条，中栏换页。 */
 const phases = document.getElementById('phases')
 phases.addEventListener('click', (event) => {
@@ -469,18 +506,24 @@ function render() {
       save(); render()
     })
     el.appendChild(kill)
-    document.body.appendChild(el)
+    // 挂到**标签页容器**里，不是 body：它跟着这一页走。
+    document.querySelector('.columns').appendChild(el)
   }
 }
+
+// 坐标**相对容器**（.columns），不是相对视口。用 fixed + clientX 的话，便签的"位置"
+// 其实是屏幕上的位置——换个标签页、窗口一变，它就跟它标注的东西错开了。
+const stageBox = () => document.querySelector('.columns').getBoundingClientRect()
 
 document.addEventListener('contextmenu', (event) => {
   if (event.target.closest('.note') !== null) return
   event.preventDefault()
+  const box = stageBox()
   menu.style.left = Math.min(event.clientX, window.innerWidth - 130) + 'px'
-  menu.style.top = Math.min(event.clientY, window.innerHeight - 110) + 'px'
+  menu.style.top = Math.min(event.clientY, window.innerHeight - 130) + 'px'
   menu.style.display = 'block'
-  menu.dataset.x = String(event.clientX)
-  menu.dataset.y = String(event.clientY)
+  menu.dataset.x = String(Math.max(4, Math.min(event.clientX - box.left, box.width - 180)))
+  menu.dataset.y = String(Math.max(4, Math.min(event.clientY - box.top, box.height - 90)))
 })
 document.addEventListener('click', () => { menu.style.display = 'none' })
 menu.addEventListener('click', (event) => {

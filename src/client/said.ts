@@ -29,6 +29,12 @@ export interface SaidLine {
   readonly seq: number
   /** 谁说的（`source.kind`）。 */
   readonly from: string
+  /**
+   * Team 消息信封里那个发信人，形如 `p1-m3k8f2a`（座位 + 时间戳 + 随机后缀，见宿主的
+   * `teammateName`）。**它是个内部名，不该直接显示**——前缀那段是座位，渲染方拿它去查角色名。
+   * 不是 Team 消息（真人、注入）时没有它。
+   */
+  readonly who?: string
   /** 正文。 */
   readonly text: string
 }
@@ -49,17 +55,20 @@ declare module '@deepseek-ai/dsh-client-ui-chat/client' {
 }
 
 /**
- * 剥掉 Team 消息自带的信封。
+ * 剥掉 Team 消息自带的信封，**但把发信人留下来**。
  *
  * 玩家经 Team 的 `send_message` 发来的话，正文前面带着一段
- * `Team message <消息 id> from <成员名>: `——那是信道的记账，不是他说的话，而右栏要的是后者。
- * 实测（2026-10-06，一次带两名玩家的真局）就是这个形状。
+ * `Team message <消息 id> from <成员名>: `——那是信道的记账，不是他说的话，所以正文要剥掉它。
+ * 而**那个成员名是这一段里唯一能分辨"谁说的"的东西**：原先连它一起剥了，于是右栏只能笼统说
+ * 「玩家」，四个座位分不出是哪一个（用户 2026-10-06 报的）。成员名的前缀就是座位 id。
+ *
  * @param text - 原始正文。
- * @returns 剥掉信封的正文；没有信封时原样返回。
+ * @returns 剥掉信封的正文与发信人；没有信封时 `who` 为空。
  */
-function unwrapTeamMessage(text: string): string {
-  const match = /^Team message \S+ from \S+:\s*/u.exec(text)
-  return match === null ? text : text.slice(match[0].length).trim()
+function unwrapTeamMessage(text: string): { text: string, who?: string } {
+  const match = /^Team message \S+ from (\S+):\s*/u.exec(text)
+  if (match === null) return { text }
+  return { text: text.slice(match[0].length).trim(), who: match[1] }
 }
 
 /**
@@ -70,9 +79,9 @@ function unwrapTeamMessage(text: string): string {
  * @param content - 事件里的 `content` 字段。
  * @returns 拼起来的文字；没有文字内容时给空串。
  */
-function textOf(content: unknown): string {
+function textOf(content: unknown): { text: string, who?: string } {
   if (typeof content === 'string') return unwrapTeamMessage(content.trim())
-  if (!Array.isArray(content)) return ''
+  if (!Array.isArray(content)) return { text: '' }
   const parts: string[] = []
   for (const item of content) {
     if (typeof item === 'string') {
@@ -109,12 +118,13 @@ export const saidDefinition: ConversationNodeDefinition<SaidBatch> = {
     for (const item of inserted) {
       if (typeof item !== 'object' || item === null) continue
       const one = item as { content?: unknown, source?: { kind?: unknown } }
-      const text = textOf(one.content)
+      const { text, who } = textOf(one.content)
       // 没有正文的丢掉：注入里有一大堆空的、或者只有工具调用的，它们不是"谁说了什么"。
       if (text === '') continue
       lines.push({
         seq: event.seq,
         from: typeof one.source?.kind === 'string' ? one.source.kind : '(没有来源)',
+        ...(who === undefined ? {} : { who }),
         text,
       })
     }

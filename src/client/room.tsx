@@ -678,7 +678,35 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
  * @param props - 本地化文案与已经读到的那些话。
  * @returns 消息流那一栏。
  */
-function RightColumn({ t, said, started }: Locale & { said: readonly SaidLine[], started: boolean }) {
+/**
+ * 从 Team 的成员名（`p1-m3k8f2a`）里找出这个人演的角色叫什么。
+ *
+ * 成员名的前缀是座位 id（宿主的 `teammateName` 就是 `${seat}-<时间戳><随机>` 拼的），而那是分辨
+ * 「这一句是谁说的」唯一的线索——信封里只有这个内部名。查不到就给 `undefined`，由调用方决定
+ * 退回什么。
+ *
+ * @param who - `SaidLine.who`。
+ * @param seatNames - 座位 id → 角色名。
+ * @returns 角色名；这个座位不在桌上（或者名字不是那个形状）时给 `undefined`。
+ */
+function seatName(
+  who: string,
+  seatNames: ReadonlyMap<string, string>,
+): string | undefined {
+  const seat = who.split('-')[0]
+  return seat === undefined ? undefined : seatNames.get(seat)
+}
+
+/**
+ * 右栏：桌上说了什么。
+ * @param props - 本地化文案、句子、开局了没有、以及座位到角色名的对照。
+ * @returns 一栏发言。
+ */
+function RightColumn({ t, said, started, seatNames }: Locale & {
+  said: readonly SaidLine[]
+  started: boolean
+  seatNames: ReadonlyMap<string, string>
+}) {
   const lines = said.filter(isSaid)
   return <div style={{ padding: '14px 16px', boxSizing: 'border-box' }}>
     <Heading>{t('right.said')}</Heading>
@@ -697,11 +725,16 @@ function RightColumn({ t, said, started }: Locale & { said: readonly SaidLine[],
           <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '2px' }}>
             {line.from === 'user'
               ? t('right.you')
-              // 玩家有两条路进来：直接在座说的，与经 Team 的 send_message 发来的。对读的人来说
-              // 都是「玩家」，而 `kind` 这个内部名字不该出现在界面上。
-              : line.from === 'agent-message' || line.from === 'team-message'
-                ? t('right.player')
-                : line.from}
+              // 玩家有两条路进来：直接在座说的，与经 Team 的 send_message 发来的。
+              //
+              // Team 那条的信封里带着发信人，而它的前缀就是座位 id——**那就是这一栏原先缺的东西**：
+              // 只按 `kind` 显示，四个座位全糊成一句「玩家」（用户 2026-10-06 报的）。查得到角色名
+              // 就用角色名；查不到（那一场的人已经不在座上了）退回座位号，总比「玩家」有用。
+              : line.who !== undefined
+                ? seatName(line.who, seatNames) ?? line.who.split('-')[0] ?? t('right.player')
+                : line.from === 'agent-message' || line.from === 'team-message'
+                  ? t('right.player')
+                  : line.from}
           </div>
           <div style={{ fontSize: '12.5px', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {line.text}
@@ -730,6 +763,12 @@ export function RoomView({
     ? snapshot.game?.phase as Phase
     : PHASES[0]
   const reached = snapshot.game === null ? -1 : PHASES.indexOf(live)
+  // 座位 id → 角色名。右栏拿它把 Team 消息里的内部名翻成人名——那一栏原先只有一句「玩家」，
+  // 四个座位分不出是谁（用户 2026-10-06 报的）。
+  const seatNames = new Map<string, string>(
+    (snapshot.cases.find(one => one.id === snapshot.game?.caseId)?.roles ?? [])
+      .map(role => [role.id, role.name] as const),
+  )
   // 回看：点了已经走过的哪一步，中栏就停在那儿；不点就跟着宿主走。
   const [peek, setPeek] = useState<Phase | null>(null)
   const shown = peek ?? live
@@ -839,7 +878,7 @@ export function RoomView({
         minWidth: 0, minHeight: 0, overflowY: 'auto',
         borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
       }}>
-        <RightColumn t={t} said={said} started={snapshot.game !== null} />
+        <RightColumn t={t} said={said} started={snapshot.game !== null} seatNames={seatNames} />
       </div>
     </div>
 

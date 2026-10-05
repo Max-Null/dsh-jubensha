@@ -640,7 +640,7 @@ export function apply(ctx: Context): void {
       action: {
         type: 'string',
         enum: ['show', 'start', 'advance', 'reveal'],
-        description: 'show = 查看当前局面（默认）；start = 开一局；advance = 推进到下一阶段；reveal = 公布线索到桌上。',
+        description: 'show = 查看当前局面（默认）；start = 开一局；advance = 推进到下一阶段（**推进之前先确认真人在这一阶段说过话**——他一言未发就往下走，这一局就变成 AI 自己演给自己看了）；reveal = 公布线索到桌上。',
       },
       caseId: { type: 'string', description: 'start 用：本子编号，如 "01"。' },
       title: { type: 'string', description: 'start 用：本子名，如「拾光照相馆」。' },
@@ -1088,7 +1088,7 @@ export function apply(ctx: Context): void {
       action: {
         type: 'string',
         enum: ['list', 'spawn', 'say', 'relay', 'unseat'],
-        description: 'list = 看桌上都有谁（默认）；spawn = 让一位 AI 玩家上桌；say = 把一句话说给某位玩家或全桌；relay = 把某位玩家刚说的话转达给桌上其余人；unseat = 从座位上撤掉这位玩家。',
+        description: 'list = 看桌上都有谁（默认）——**返回里含 humanSeat（真人坐在哪个位子）与 notSeated（还没上桌的位子）**；spawn = 让一位 AI 玩家上桌；say = 把一句话说给某位玩家或全桌；relay = 把某位玩家刚说的话转达给桌上其余人；unseat = 从座位上撤掉这位玩家。',
       },
       seat: { type: 'string', description: 'spawn / say / relay / unseat 用：座位 id，要与局面里的 seats 用同一套命名。say 也可以用 "*" 表示说给全桌听。' },
       name: { type: 'string', description: 'spawn 用：角色名。' },
@@ -1096,7 +1096,7 @@ export function apply(ctx: Context): void {
         type: 'string',
         description: 'spawn 用：这个角色的角色本。复盘前 jubensha_case action="book" 给的是一个引用，把它（单独那一串）填进来即可——程序自己解开，正文不经过你的上下文；复盘后也可以直接给全文。只发给这一个玩家，绝不转述、绝不换座位。',
       },
-      message: { type: 'string', description: 'say 用：要对这位玩家说的话——提问、转述，或阶段提示。' },
+      message: { type: 'string', description: 'say 用：要对这位玩家说的话——提问、转述，或阶段提示。**注意：只能发给 AI 玩家。真人那个位子（list 里的 humanSeat）不能替他发言**——他是人，要等他开口；你要做的是把话头交给他，然后停下。' },
       actor: { type: 'string', description: 'spawn 用：由池子里的哪个演员来演这一局（jubensha_actor 的 id）。不填就是个新面孔——那样他不会记得这一局，下一局也没人记得他。' },
     },
     output: {
@@ -1122,6 +1122,8 @@ export function apply(ctx: Context): void {
     },
     async execute(args, exec) {
       let delivered: string | undefined
+      const session = exec.agent?.session.header.id
+      const game = session === undefined ? undefined : games.get(session)
       switch (args.action ?? 'list') {
         case 'spawn': {
           const { seat, roleBook } = args
@@ -1223,7 +1225,14 @@ export function apply(ctx: Context): void {
       }
       return {
         players: players.list().map(player => ({ seat: player.seat, name: player.name })),
-        ...delivered !== undefined ? { delivered } : {},
+        // **真人位要单独说出来。** `players` 是「已经 spawn 的 AI 玩家」，而真人从来不在里面
+        // ——于是 DM 眼里「桌上就三个人」，它自己把四个阶段推完、一次都没叫过真人
+        // （2026-10-06 用户报的那局「全自动结束」就是这么来的）。这里补上两样它需要知道的：
+        // 真人坐在哪儿，以及还有哪些位子没人。
+        ...(game === undefined ? {} : {
+          humanSeat: game.humanSeat,
+          notSeated: game.seats.filter(seat => !players.list().some(one => one.seat === seat)),
+        }),        ...delivered !== undefined ? { delivered } : {},
       }
     },
   }))

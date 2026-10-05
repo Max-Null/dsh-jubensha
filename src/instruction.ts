@@ -62,6 +62,14 @@ export function openingInstruction(entry: RoomCase, assignment: readonly SeatAss
       lines.push(`   ${one.seat} ${one.roleName} → actor="${one.actorId}"（${one.actorName}）`)
     }
   }
+  lines.push(
+    '',
+    '**真人那个位子（humanSeat）要等他。** 他不是 AI 玩家：把话头交给他就停下，不要替他发言，'
+      + '也不要在他开口之前推进阶段。AI 玩家之间可以互相问、可以说个不停——而每一步什么时候'
+      + '往下走，由真人决定。' +
+      '（一条真事：少了这句，DM 会把四个阶段一口气推完、一次都不叫真人——那一局就变成 AI '
+      + '自己演给自己看了，2026-10-06 用户报的。）',
+  )
   lines.push('', '剩下的按本子来——开局第一句、节奏、什么时候该搜证，你比我清楚。')
   return lines.join('\n')
 }

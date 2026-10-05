@@ -72,6 +72,7 @@ function Card({ children }: { children: React.ReactNode }) {
     background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.06))',
     padding: '9px 12px',
     marginBottom: '8px',
+    boxSizing: 'border-box',
   }}>{children}</div>
 }
 
@@ -162,7 +163,7 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
   const roleOf = (seat: string): { name: string; public: string } | undefined =>
     caseEntry?.roles.find(role => role.id === seat) as { name: string; public: string } | undefined
 
-  return <div style={{ padding: '14px 16px' }}>
+  return <div style={{ padding: '14px 16px', boxSizing: 'border-box' }}>
     <section style={{ marginBottom: '18px' }}>
       <Heading>{t('left.table')}</Heading>
       {seats.length === 0
@@ -235,7 +236,12 @@ function MidColumn({
   const caseEntry = snapshot.cases.find(one => one.id === game?.caseId)
   const human = caseEntry?.roles.find(role => role.player === 'human')
 
-  return <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px' }}>
+  return <div style={{
+    // `boxSizing` 必须写：`width: 100%` 加 `padding: 20px` 在默认的 `content-box` 下总宽是
+    // 「容器宽 + 40px」，窄屏上那 40px 就是溢出——它会盖到隔壁栏上去，看着像别人的内容压过来。
+    maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px',
+    boxSizing: 'border-box',
+  }}>
     {game?.script !== undefined && game.script !== ''
       // **默认收起**。剧本正文是"偶尔回看"的东西，而它一展开就占满整屏——那样点了阶段页的
       // 人第一屏看到的还是剧本，得往下滚才看见他要看的那一页。（原型里是展开的，那是为了
@@ -353,7 +359,12 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
     setCast(next)
   }
 
-  return <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px' }}>
+  return <div style={{
+    // 同 `MidColumn`：`width: 100%` 与 `padding` 一起出现时必须有 `boxSizing`，否则多出的
+    // padding 会把这一栏顶出轨道。
+    maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px',
+    boxSizing: 'border-box',
+  }}>
     <h2 style={{ fontSize: '14px', margin: '0 0 4px', fontWeight: 600 }}>{t('mid.noGame')}</h2>
     <Heading>{t('mid.cases')}</Heading>
     <div style={{ marginTop: '14px' }}>
@@ -404,7 +415,12 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
               ? <pre style={{
                 margin: '6px 0 0', padding: '6px 8px', maxHeight: '150px', overflow: 'auto',
                 background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.10))',
-                borderRadius: '8px', fontSize: '11px', lineHeight: 1.5, whiteSpace: 'pre-wrap',
+                borderRadius: '8px', fontSize: '11px', lineHeight: 1.5,
+                // `pre-wrap` 只在空格处断行，而这段里最长的一行是个没有空格的 Windows 路径——
+                // 不 `break-all` 它就横着撑破中栏。`maxWidth` 是跟 `overflow: auto` 一起用的：
+                // 真遇到断不开的东西（比如一个超长英文单词）时给横向滚动，而不是让整页变宽。
+                whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxWidth: '100%',
+                boxSizing: 'border-box',
               }}>{openingInstruction(one, assignment)}</pre>
               : null}
           </div>
@@ -421,7 +437,7 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
  */
 function RightColumn({ t, said }: Locale & { said: readonly SaidLine[] }) {
   const lines = said.filter(isSaid)
-  return <div style={{ padding: '14px 16px' }}>
+  return <div style={{ padding: '14px 16px', boxSizing: 'border-box' }}>
     <Heading>{t('right.said')}</Heading>
     {lines.length === 0
       ? <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>{t('right.empty')}</div>
@@ -485,18 +501,29 @@ export function RoomView({
 
     <div style={{
       display: 'grid',
-      gridTemplateColumns: '286px minmax(0,1fr) 366px',
+      // **中栏的 min 不能是 0。** `1fr` 的 min 默认就是 0，而 grid 会先让两侧吃满各自的
+      // `max`，中栏只能捡剩下的——1024 视口下它被压到一百多像素，文字竖着排。给中栏一个
+      // 实在的下限（300），两侧就只能在窄屏时缩到各自的 min 去让路。
+      gridTemplateColumns: 'minmax(150px, 286px) minmax(300px, 1fr) minmax(190px, 366px)',
       alignItems: 'start',
     }}>
-      <div style={{ borderRight: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))' }}>
+      <div style={{
+        // grid 子项默认 `min-width: auto`，内容一长就把列撑破——`minmax(0,1fr)` 只让轨道能缩，
+        // 挡不住子项自己溢出。三栏都要标这一句。
+        minWidth: 0,
+        borderRight: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+      }}>
         <LeftColumn snapshot={snapshot} t={t} />
       </div>
-      <div>
+      <div style={{ minWidth: 0 }}>
         {snapshot.game === null
           ? <OpenGame snapshot={snapshot} t={t} />
           : <MidColumn snapshot={snapshot} phase={phase} t={t} />}
       </div>
-      <div style={{ borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))' }}>
+      <div style={{
+        minWidth: 0,
+        borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+      }}>
         <RightColumn t={t} said={said} />
       </div>
     </div>

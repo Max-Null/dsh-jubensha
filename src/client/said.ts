@@ -132,23 +132,42 @@ export const saidDefinition: ConversationNodeDefinition<SaidBatch> = {
 export const SAID_LIMIT = 40
 
 /**
+ * 一个 node 的 `data` 是不是我要的那一批。
+ *
+ * `ConversationViewNode.data` 的类型是 `unknown`——那是定义方与渲染方之间的边界，所以这里
+ * 窄化一次，形状不对就当没看见（别让一个别的东西把右栏炸掉）。
+ * @param data - node 上的 `data`。
+ * @returns 认得出来就给那一批，否则给 `undefined`。
+ */
+function asBatch(data: unknown): SaidBatch | undefined {
+  if (typeof data !== 'object' || data === null) return undefined
+  const one = data as { seq?: unknown, lines?: unknown }
+  if (typeof one.seq !== 'number' || !Array.isArray(one.lines)) return undefined
+  return { seq: one.seq, lines: one.lines as SaidLine[] }
+}
+
+/**
  * 从会话快照里读「谁说了什么」。
  *
- * 两跳：`navigation.items()` 给出**加载过的每一轮**（按时间序），再逐轮用
- * `nodes.turnDataSource(turn, kind)` 取这一类 node 的数据。拿不到快照时给空数组——房间页那侧
- * 已经在轮询，这一格空着比整页报错好。
+ * 走 `nodes.values()`——**全部已投影的 node**，一步到位：它不要求「哪几轮加载了」，也不要求
+ * node 是可见的。这一点很关键：「团队」标签显示的时候对话页并没有在显示，那些轮可能根本不在
+ * 导航索引里，而 `turnDataSource(turn, kind)` 是从导航索引拿 turn 的。
  *
- * **只留最后 `SAID_LIMIT` 句**：桌上说的话是越近越要看。
+ * 拿不到快照时给空数组——房间页那侧已经在轮询，这一格空着比整页报错好。
  * @param snapshot - Chat 目标的快照；目标还没就绪时给 `undefined`。
  * @returns 按时间序的句子，最多 `SAID_LIMIT` 条。
  */
 export function readSaid(snapshot: ChatSnapshot | undefined): SaidLine[] {
   if (snapshot === undefined) return []
   const lines: SaidLine[] = []
-  for (const item of snapshot.navigation.items()) {
-    for (const batch of snapshot.nodes.turnDataSource(item.turn, SAID_KIND).getSnapshot()) {
-      lines.push(...batch.lines)
-    }
+  for (const node of snapshot.nodes.values()) {
+    if (node.kind !== SAID_KIND) continue
+    const batch = asBatch(node.data)
+    if (batch === undefined) continue
+    lines.push(...batch.lines)
   }
+  // `values()` 明说"without imposing render order"，而每个 batch 内部的顺序是它自己的。
+  // `Array.sort` 自 ES2019 起是稳定的，所以同一个 `seq` 里那几行不会被搅乱。
+  lines.sort((left, right) => left.seq - right.seq)
   return lines.length > SAID_LIMIT ? lines.slice(lines.length - SAID_LIMIT) : lines
 }

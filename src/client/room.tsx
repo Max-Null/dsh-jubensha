@@ -435,10 +435,15 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
  * @param props - 本地化文案与已经读到的那些话。
  * @returns 消息流那一栏。
  */
-function RightColumn({ t, said }: Locale & { said: readonly SaidLine[] }) {
+function RightColumn({ t, said, started }: Locale & { said: readonly SaidLine[], started: boolean }) {
   const lines = said.filter(isSaid)
   return <div style={{ padding: '14px 16px', boxSizing: 'border-box' }}>
     <Heading>{t('right.said')}</Heading>
+    {!started && lines.length > 0
+      ? <div style={{ fontSize: '11.5px', opacity: 0.6, marginBottom: '8px', lineHeight: 1.5 }}>
+        {t('right.notStarted')}
+      </div>
+      : null}
     {lines.length === 0
       ? <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>{t('right.empty')}</div>
       : <div style={{ marginBottom: '10px' }}>
@@ -481,7 +486,14 @@ export function RoomView({
     PHASES.includes(snapshot.game?.phase as Phase) ? snapshot.game?.phase as Phase : 'self-intro',
   )
 
-  return <div data-jubensha-room="" style={{ position: 'relative', minHeight: '100%' }}>
+  return <div data-jubensha-room="" style={{
+    position: 'relative',
+    // 高度定在**这一层**：上面那行阶段按钮（40px）也要算进去，否则整页还会滚那 40px。
+    // 根做 flex 列，三栏那一层吃剩下的——这样加一条阶段栏不用去改那个 118。
+    height: 'calc(100vh - 118px)',
+    display: 'flex',
+    flexDirection: 'column',
+  }}>
     <div style={{ display: 'flex', gap: '4px', padding: '10px 20px 8px', flexWrap: 'wrap' }}>
       {PHASES.map(one => <button
         key={one}
@@ -501,30 +513,38 @@ export function RoomView({
 
     <div style={{
       display: 'grid',
-      // **中栏的 min 不能是 0。** `1fr` 的 min 默认就是 0，而 grid 会先让两侧吃满各自的
-      // `max`，中栏只能捡剩下的——1024 视口下它被压到一百多像素，文字竖着排。给中栏一个
-      // 实在的下限（300），两侧就只能在窄屏时缩到各自的 min 去让路。
+      // **三栏各自滚动，页面本身不动。**
+      //
+      // 高度必须自己定：这个 slot 外面那层是 `flex: 1 0 auto`（实测 `viewArea`），它按内容长、
+      // 不会缩——所以 `height: 100%` 拿到的是「内容有多高就是多高」，等于没定。而那 118px 是
+      // 顶部两条栏（标签栏 + 标题栏）实测的高度：滚动容器实测 702，窗口 820。
+      //
+      // 两侧栏的 min 也要给：grid 会先让它们吃满各自的 `max`，中栏只能捡剩下的——1024 视口下
+      // 中栏被压到一百多像素、文字竖着排。给它一个实在的下限（300），两侧才肯缩。
       gridTemplateColumns: 'minmax(150px, 286px) minmax(300px, 1fr) minmax(190px, 366px)',
-      alignItems: 'start',
+      // 吃根剩下的高度（根定的是 `calc(100vh - 118px)`）。`minHeight: 0` 是必需的：
+      // flex 子项默认 `min-height: auto`，不给它就会被内容顶开、又变回「跟着内容长」。
+      flex: 1,
+      minHeight: 0,
     }}>
       <div style={{
-        // grid 子项默认 `min-width: auto`，内容一长就把列撑破——`minmax(0,1fr)` 只让轨道能缩，
-        // 挡不住子项自己溢出。三栏都要标这一句。
-        minWidth: 0,
+        // grid 子项默认 `min-width/min-height: auto`，内容一长就把轨道撑破——`minmax` 只让轨道
+        // 能缩，挡不住子项自己溢出。三栏都要标这两句，再配 `overflowY`。
+        minWidth: 0, minHeight: 0, overflowY: 'auto',
         borderRight: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
       }}>
         <LeftColumn snapshot={snapshot} t={t} />
       </div>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
         {snapshot.game === null
           ? <OpenGame snapshot={snapshot} t={t} />
           : <MidColumn snapshot={snapshot} phase={phase} t={t} />}
       </div>
       <div style={{
-        minWidth: 0,
+        minWidth: 0, minHeight: 0, overflowY: 'auto',
         borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
       }}>
-        <RightColumn t={t} said={said} />
+        <RightColumn t={t} said={said} started={snapshot.game !== null} />
       </div>
     </div>
 

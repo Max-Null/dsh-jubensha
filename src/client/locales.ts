@@ -42,6 +42,7 @@ export const zh = {
 
   // 右栏
   'right.said': '桌上说了什么',
+  'right.notStarted': '这一栏读的是这个会话里说过的话，跟局面无关——开一局之后，它们才是桌上的发言。',
   'right.composer': '说话在下面那个输入框里——它就是对话页那一个，两种形态共用同一局。',
   'right.empty': '还没人说话。开一局之后，桌上说的话会一条条出现在这儿。',
   'right.you': '你',
@@ -127,6 +128,7 @@ export const en = {
   'mid.noGame': 'No game yet. Ask the host in the conversation to start one, and the table shows up here.',
 
   'right.said': 'What was said',
+  'right.notStarted': 'This column reads what has been said in this session — it is not tied to the game. Once a game starts, these become the words spoken at the table.',
   'right.composer': 'You speak in the composer below — the same one the conversation page uses. Both share one game.',
   'right.empty': 'Nobody has spoken yet. Once a game starts, what is said at the table shows up here.',
   'right.you': 'You',

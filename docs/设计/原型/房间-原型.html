@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>剧本杀房间 · 原型</title>
+<style>
+  /* 用 DSH 的语义别名，缺了就退回这套值——正式实现里这些会走 CSS Module + 主题 token。 */
+  :root {
+    --bg: #ffffff; --fg: #1c1d21; --muted: #6b6f76; --line: rgba(0,0,0,.10);
+    --card: #f7f8f9; --sunken: rgba(0,0,0,.035); --accent: #3b6fd4; --warn: #b4552d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1c20; --fg: #e8e9ec; --muted: #9aa0a8; --line: rgba(255,255,255,.12);
+      --card: #232429; --sunken: rgba(255,255,255,.05); --accent: #7aa2f7; --warn: #e08c66;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px 24px 28px; background: var(--bg); color: var(--fg);
+    font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .columns { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(0,1fr); gap: 18px; margin-top: 16px; }
+  @media (max-width: 860px) { .columns { grid-template-columns: 1fr; } }
+  section { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 10px 12px; margin-bottom: 12px; }
+  section > h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 8px; letter-spacing: .04em; }
+
+  /* 阶段条：五个阶段横排，走到哪亮到哪。 */
+  .phases { display: flex; align-items: center; gap: 0; margin-top: 14px; flex-wrap: wrap; }
+  .phase { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .phase .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .35; }
+  .phase.done { color: var(--fg); }
+  .phase.done .dot { opacity: 1; background: var(--accent); }
+  .phase.now { color: var(--fg); font-weight: 600; }
+  .phase.now .dot { opacity: 1; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+  .phase + .phase::before { content: ""; width: 26px; height: 1px; background: var(--line); margin: 0 8px; }
+
+  /* 座位表：一行一位，头像 + 座位号 + 演谁 + 谁在演。 */
+  .seat { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
+  .seat + .seat { border-top: 1px solid var(--line); }
+  .seat .no { width: 22px; color: var(--muted); font-size: 12px; }
+  .seat .who { min-width: 0; }
+  .seat .who b { font-weight: 600; }
+  .seat .who span { color: var(--muted); font-size: 12px; }
+  .seat .you { font-size: 11px; color: var(--accent); border: 1px solid currentColor; border-radius: 5px; padding: 0 5px; }
+  .seat .empty { color: var(--muted); }
+  .face { width: 28px; height: 28px; border-radius: 7px; overflow: hidden; flex: none; }
+  .face svg { display: block; }
+
+  /* 线索卡：跟本子里的三条一一对应，没发出来的显示成背面。 */
+  .clues { display: grid; gap: 8px; }
+  .clue { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: var(--bg); }
+  .clue .head { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+  .clue .tag { font-size: 11px; color: var(--muted); }
+  .clue .title { font-weight: 600; }
+  .clue .body { color: var(--muted); font-size: 12px; }
+  .clue.sealed { opacity: .5; }
+  .clue.sealed .title::after { content: "（还没发到桌上）"; font-weight: 400; color: var(--muted); }
+
+  /* 时间线：**只显示玩家已经听过的**——本子里的真相时间线不在这儿。 */
+  .clock { display: grid; grid-template-columns: 46px 1fr; gap: 2px 10px; font-size: 12px; }
+  .clock dt { color: var(--muted); }
+  .clock dd { margin: 0; }
+  .clock .none { color: var(--muted); }
+
+  .case { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; }
+  .case + .case { border-top: 1px solid var(--line); }
+  .case .mark { color: var(--accent); }
+  .case .roster { color: var(--muted); font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .row .no { width: 22px; color: var(--muted); font-size: 12px; }
+  .row .name { flex: 1; }
+  select { font: inherit; font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  select:disabled { opacity: .5; }
+  button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; }
+  button:hover { background: var(--sunken); }
+  .cast { display: flex; gap: 9px; align-items: center; padding: 4px 0; }
+  .cast .who b { font-weight: 600; }
+  .cast .who span { color: var(--muted); font-size: 12px; display: block; }
+  pre { margin: 8px 0 0; padding: 8px 10px; background: var(--sunken); border-radius: 8px; font-size: 11px; line-height: 1.55; white-space: pre-wrap; color: var(--muted); }
+  footer { margin-top: 4px; color: var(--muted); font-size: 12px; }
+  .note { margin-top: 22px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 12px; }
+  .note b { color: var(--fg); }
+</style>
+</head>
+<body>
+
+<h1>拾光照相馆</h1>
+<div class="sub">case 01 ｜ deduction ｜ 第 1 轮 ｜ 线索 0 / 3 条已发到桌上</div>
+
+<!-- 阶段条：本子里的五个阶段就在这儿，走到哪亮到哪。 -->
+<div class="phases">
+  <div class="phase done"><span class="dot"></span>自述</div>
+  <div class="phase now"><span class="dot"></span>问话</div>
+  <div class="phase"><span class="dot"></span>搜证</div>
+  <div class="phase"><span class="dot"></span>发言投票</div>
+  <div class="phase"><span class="dot"></span>复盘</div>
+</div>
+
+<div class="columns">
+  <!-- 左：这一局正在发生的事 -->
+  <div>
+    <section>
+      <h2>桌上的位子</h2>
+      <div class="seat">
+        <span class="no">p0</span><span class="face" style="background:var(--sunken)"></span>
+        <span class="who"><b>林默</b> <span>32 岁 · 老周的侄子</span></span>
+        <span class="you">你</span>
+      </div>
+      <div class="seat">
+        <span class="no">p1</span>
+        <span class="face"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" role="img" aria-hidden="true"><rect width="40" height="40" fill="hsl(309, 42%, 32%)"/><polygon points="20,10.1 30.4,28.8 9.6,28.8" fill="hsl(309, 58%, 72%)"/><circle cx="29.6" cy="10.4" r="6.8" fill="hsl(309, 70%, 88%)"/><circle cx="20" cy="20" r="16.8" fill="none" stroke="hsl(309, 40%, 18%)" stroke-width="1.2" opacity="0.35"/></svg></span>
+        <span class="who"><b>陈建国</b> <span>61 岁 · 退休邮递员</span></span>
+        <span class="sub">老周演</span>
+      </div>
+      <div class="seat">
+        <span class="no">p2</span>
+        <span class="face"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" role="img" aria-hidden="true"><rect width="40" height="40" fill="hsl(141, 36%, 48%)"/><polygon points="20,10.1 30.4,28.8 9.6,28.8" fill="hsl(141, 62%, 88%)"/><circle cx="29.6" cy="10.4" r="6.8" fill="hsl(141, 70%, 88%)"/><circle cx="20" cy="20" r="16.8" fill="none" stroke="hsl(141, 40%, 18%)" stroke-width="1.2" opacity="0.35"/></svg></span>
+        <span class="who"><b>马丽</b> <span>41 岁 · 做老照片生意，圈里叫阿May</span></span>
+        <span class="sub">阿May 演</span>
+      </div>
+      <div class="seat">
+        <span class="no">p3</span><span class="face" style="background:var(--sunken)"></span>
+        <span class="who"><b>苏小满</b> <span>24 岁 · 老周的学徒</span></span>
+        <span class="empty">还没上桌</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>线索</h2>
+      <div class="clues">
+        <div class="clue sealed">
+          <div class="head"><span class="tag">01</span><span class="title">暗房的门是从外面锁着的</span></div>
+          <div class="body">挂锁锁在门外，钥匙还在柜台的钥匙盘上。</div>
+        </div>
+        <div class="clue sealed">
+          <div class="head"><span class="tag">02</span><span class="title">老周右手攥着半张湿了又干的底片</span></div>
+          <div class="body">攥得很紧。底片从中间撕断，上面是个模糊的女人侧影。</div>
+        </div>
+        <div class="clue sealed">
+          <div class="head"><span class="tag">03</span><span class="title">柜台上的账本，最后一行</span></div>
+          <div class="body">铅笔写的：「21:50 定金（丽）— 退」。旁边有擦改痕迹。</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>时间线 · 你们说过的</h2>
+      <dl class="clock">
+        <dt>19:30</dt><dd>老陈说他来下棋，坐了一会儿就走</dd>
+        <dt>21:20</dt><dd>你（林默）到店，跟叔叔吵了一架，21:45 摔门走</dd>
+        <dt class="none">—</dt><dd class="none">其余时段还没有人交代</dd>
+      </dl>
+    </section>
+  </div>
+
+  <!-- 右：开一局 -->
+  <div>
+    <section>
+      <h2>可选的本子</h2>
+      <div class="case">
+        <span class="mark">◉</span>
+        <div><div><b>拾光照相馆</b> <span class="sub">case 01 ｜ deduction</span></div>
+        <div class="roster">p0 林默 · p1 陈建国 · p2 马丽 · p3 苏小满</div></div>
+      </div>
+      <div class="case">
+        <span class="mark" style="color:var(--muted)">○</span>
+        <div><div>深夜电台 <span class="sub">case 02 ｜ deduction</span></div>
+        <div class="roster">p0 周远 · p1 吴国强 · p2 林蕾 · p3 苏雨</div></div>
+      </div>
+      <div class="case">
+        <span class="mark" style="color:var(--muted)">○</span>
+        <div><div>没拆的那封信 <span class="sub">case 03 ｜ drama</span></div>
+        <div class="roster">p0 宋阳 · p1 林小满 · p2 周建国 · p3 方老师</div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>排座</h2>
+      <div class="row"><span class="no">p1</span><span class="name">陈建国</span>
+        <select><option>老周</option></select></div>
+      <div class="row"><span class="no">p2</span><span class="name">马丽</span>
+        <select><option>阿May</option></select></div>
+      <div class="row"><span class="no">p3</span><span class="name">苏小满</span>
+        <select><option>（挑一个演员）</option><option disabled>老周（已坐 p1）</option><option disabled>阿May（已坐 p2）</option></select></div>
+      <button style="margin-top:8px">复制开局指令</button>
+      <pre>开一局《拾光照相馆》（case 01）。
+
+① 取本子（先 load，它会顺带报出格式问题）：
+   jubensha_case —— action="load", dir="…/cases/01-拾光照相馆"
+
+② 开局：
+   jubensha_state —— action="start", caseId="01", …
+   humanSeat="p0"
+
+③ 让这几位上桌。一座一份：
+   p1 陈建国 → actor="laozhou"（老周）
+   p2 马丽 → actor="amay"（阿May）</pre>
+    </section>
+
+    <section>
+      <h2>演员</h2>
+      <div class="cast">
+        <span class="face"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" role="img" aria-hidden="true"><rect width="40" height="40" fill="hsl(141, 36%, 48%)"/><polygon points="20,10.1 30.4,28.8 9.6,28.8" fill="hsl(141, 62%, 88%)"/><circle cx="29.6" cy="10.4" r="6.8" fill="hsl(141, 70%, 88%)"/><circle cx="20" cy="20" r="16.8" fill="none" stroke="hsl(141, 40%, 18%)" stroke-width="1.2" opacity="0.35"/></svg></span>
+        <span class="who"><b>阿May</b><span>压迫型：抓到一点就往前压，连珠追问，宁可压错。</span></span>
+      </div>
+      <div class="cast">
+        <span class="face"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" role="img" aria-hidden="true"><rect width="40" height="40" fill="hsl(309, 42%, 32%)"/><polygon points="20,10.1 30.4,28.8 9.6,28.8" fill="hsl(309, 58%, 72%)"/><circle cx="29.6" cy="10.4" r="6.8" fill="hsl(309, 70%, 88%)"/><circle cx="20" cy="20" r="16.8" fill="none" stroke="hsl(309, 40%, 18%)" stroke-width="1.2" opacity="0.35"/></svg></span>
+        <span class="who"><b>老周</b><span>能不说就不说，被追问才答，答得短；但他其实很想把话说清楚一次——那是他的缺口。</span></span>
+      </div>
+    </section>
+  </div>
+</div>
+
+<footer>这里是只读的，会跟着对话走——开一局、推进阶段、发线索都在对话里说。</footer>
+
+<div class="note">
+  <b>这张原型要说的三件事。</b><br>
+  ① <b>没有聊天栏</b>——那个 App 的右栏是公聊/私聊，而这里的聊天<b>就是对话本身</b>。再做一个只会有两个来源。<br>
+  ② <b>中栏不是剧本正文</b>——角色本在开局时已经通过对话给你了；这一栏放的是<b>你收集到的东西</b>（线索、时间线）。<br>
+  ③ <b>线索给的是"卡片"而不是一行字</b>，未发的显示成背面——它同时也是"还剩几条没拿到"的读数。<br>
+  <br>
+  <b>没做的（有意）：</b>推理笔记需要写，而面板是只读的；要做它得先有一个存笔记的地方，那是另一件事。<b>真相时间线不在这里</b>——它是封着的，只有每个角色自己说过的那些才出现在时间线上。
+</div>
+
+</body>
+</html>

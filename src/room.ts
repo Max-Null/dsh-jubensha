@@ -183,21 +183,40 @@ export interface ActorWriter {
 }
 
 /**
- * 从路径里取出动作名。
+ * 从路径里取出「子动作名」。
  *
- * 抽出来是因为它是这一层唯一**能单测**的部分：整套写端点只有在浏览器里够得着，而"哪个路径
- * 算哪个动作、哪些路径该 404"不该靠端到端去覆盖——那种覆盖要么写不出来，要么写成
- * "我把请求伪造了一遍"。
+ * 两个写端点（演员、便签）的形状一样：`<base>/<动作>`，都没有子资源。抽出来是因为它是这一层
+ * 唯一**能单测**的部分：整套写端点只有在浏览器里够得着，而"哪个路径算哪个动作、哪些该 404"
+ * 不该靠端到端去覆盖——那种覆盖要么写不出来，要么写成"我把请求伪造了一遍"。
+ * @param pathname - 请求路径。
+ * @param base - 端点的前缀，例如 `/jubensha/actor`。
+ * @returns 动作名；不属于这个端点时给 `undefined`。
+ */
+export function subAction(pathname: string, base: string): string | undefined {
+  const prefix = `${base}/`
+  if (!pathname.startsWith(prefix)) return undefined
+  const rest = pathname.slice(prefix.length)
+  // 空的一段、或者再往下还有层级，都不认。
+  if (rest === '' || rest.includes('/')) return undefined
+  return rest
+}
+
+/**
+ * 从演员端点的路径里取出动作名。
  * @param pathname - 请求路径。
  * @returns 动作名；不属于这个端点时给 `undefined`。
  */
 export function actorAction(pathname: string): string | undefined {
-  const prefix = '/jubensha/actor/'
-  if (!pathname.startsWith(prefix)) return undefined
-  const rest = pathname.slice(prefix.length)
-  // 空的一段、或者再往下还有层级，都不认——这个端点没有子资源。
-  if (rest === '' || rest.includes('/')) return undefined
-  return rest
+  return subAction(pathname, '/jubensha/actor')
+}
+
+/**
+ * 从便签端点的路径里取出动作名。
+ * @param pathname - 请求路径。
+ * @returns 动作名；不属于这个端点时给 `undefined`。
+ */
+export function noteAction(pathname: string): string | undefined {
+  return subAction(pathname, '/jubensha/note')
 }
 
 /**
@@ -300,4 +319,115 @@ export function mountActorApi(ctx: Context, pool: () => Promise<ActorWriter>): v
       }
     },
   }), '@max-null/dsh-jubensha: /jubensha/actor')
+}
+
+/** 便签池要能干的事——只取房间页用得上的那三件，不把整块板子交出去。 */
+export interface NoteWriter {
+  /** 留一张新的。 */
+  add(sessionId: string, input: { color: string; text: string; x: number; y: number }): Promise<unknown>
+  /** 改一张；传哪几项就改哪几项。 */
+  edit(
+    sessionId: string,
+    id: string,
+    patch: { color?: string; text?: string; x?: number; y?: number },
+  ): Promise<unknown>
+  /** 撕掉一张。序号不回收。 */
+  remove(sessionId: string, id: string): Promise<string>
+}
+
+/** 从请求体里取一个可选的字符串字段。 */
+function maybe(body: Record<string, unknown>, field: string): string | undefined {
+  const value = body[field]
+  return typeof value === 'string' ? value : undefined
+}
+
+/** 从请求体里取一个可选的数字字段。 */
+function maybeNumber(body: Record<string, unknown>, field: string): number | undefined {
+  const value = body[field]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * 挂 `/jubensha/note/<动作>`（POST）。
+ *
+ * **为什么便签要端点，而排座不用**：排座是临时的（排完就发出去，关掉面板就该忘），
+ * 便签是**要留下来的**——它得跟着会话活，切走再回来还在。
+ *
+ * 三个动作都带 `session`：便签按会话分，而 HTTP 请求本身没有会话上下文。
+ * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
+ * @param pool - 取便签池；由调用方决定什么时候开它。
+ */
+export function mountNoteApi(ctx: Context, pool: () => Promise<NoteWriter>): void {
+  const services = ctx as unknown as {
+    webServer: {
+      register(descriptor: {
+        kind: string
+        path: string
+        handler: (req: unknown, res: unknown) => Promise<void> | void
+      }): () => void
+    }
+    webRuntime: { trustedHosts: readonly string[] }
+  }
+
+  ctx.effect(() => services.webServer.register({
+    kind: 'prefix',
+    path: '/jubensha/note',
+    handler: async (req: unknown, res: unknown) => {
+      const request = req as { headers: RequestHeaders, method?: string, url?: string }
+      if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
+        writeJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if ((request.method ?? 'GET') !== 'POST') {
+        writeJson(res, 405, { ok: false, error: 'method-error' })
+        return
+      }
+      const action = noteAction(new URL(request.url ?? '/', 'http://dsh.internal').pathname)
+      if (action === undefined) {
+        writeJson(res, 404, { ok: false, error: 'not-found' })
+        return
+      }
+      try {
+        const body = await readJsonBody(req)
+        const session = need(body, 'session')
+        const notes = await pool()
+        let value: unknown
+        switch (action) {
+          case 'add': {
+            value = await notes.add(session, {
+              color: maybe(body, 'color') ?? 'white',
+              text: maybe(body, 'text') ?? '',
+              x: maybeNumber(body, 'x') ?? 40,
+              y: maybeNumber(body, 'y') ?? 40,
+            })
+            break
+          }
+          case 'edit': {
+            // 传哪几项就改哪几项：没传的字段不进 patch，而不是传一个 undefined 进去
+            // （那会被 `?? note.x` 挡回来，看似一样，但"没传"与"传了 undefined"是两件事，
+            // 哪天默认值改了就会露出来）。
+            const patch: { color?: string; text?: string; x?: number; y?: number } = {}
+            const color = maybe(body, 'color')
+            const text = maybe(body, 'text')
+            const x = maybeNumber(body, 'x')
+            const y = maybeNumber(body, 'y')
+            if (color !== undefined) patch.color = color
+            if (text !== undefined) patch.text = text
+            if (x !== undefined) patch.x = x
+            if (y !== undefined) patch.y = y
+            value = await notes.edit(session, need(body, 'id'), patch)
+            break
+          }
+          case 'remove': value = await notes.remove(session, need(body, 'id')); break
+          default: {
+            writeJson(res, 404, { ok: false, error: 'not-found' })
+            return
+          }
+        }
+        writeJson(res, 200, { ok: true, value })
+      } catch (error: unknown) {
+        writeJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    },
+  }), '@max-null/dsh-jubensha: /jubensha/note')
 }

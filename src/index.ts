@@ -25,7 +25,9 @@ import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBook
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
 import { listCases } from './cases.ts'
-import { mountActorApi, mountRoomApi } from './room.ts'
+import { openNotePool } from './notes.ts'
+import type { NotePool } from './notes.ts'
+import { mountActorApi, mountNoteApi, mountRoomApi } from './room.ts'
 import type { RoomSnapshot } from './room.ts'
 import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
@@ -106,6 +108,22 @@ let actors: Promise<ActorPool> | undefined
 function requireActors(ctx: Context): Promise<ActorPool> {
   actors ??= openActorPool(ctx)
   return actors
+}
+
+/**
+ * 便签池。懒开法与演员池一样，但**不能共用那个变量**——它们是两个域、两套 backend：
+ * 演员跟人走，便签跟会话走。
+ */
+let boards: Promise<NotePool> | undefined
+
+/**
+ * 取便签池。
+ * @param ctx - 插件上下文。
+ * @returns 打开好的便签池。
+ */
+function requireNotes(ctx: Context): Promise<NotePool> {
+  boards ??= openNotePool(ctx)
+  return boards
 }
 
 /**
@@ -495,6 +513,8 @@ export function apply(ctx: Context): void {
       // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，
       // 收益不抵。四本本子的 YAML 解析是毫秒级的事。
       cases: [...listCases()],
+      // 便签跟着快照一起来：面板拉一次就有全部。`board()` 给的就是一份拷贝（域里那份是活的）。
+      notes: (await requireNotes(ctx)).board(sessionId).notes,
       actors: actors.map(actor => ({
         id: actor.id,
         name: actor.name,
@@ -507,6 +527,9 @@ export function apply(ctx: Context): void {
   // 设置页要**写**演员池（改名字、改性格、换头像、请走），而只读快照给不了这个。
   // 写端点只认那五个动作，围栏与只读那套同一份。
   mountActorApi(ctx, () => requireActors(ctx))
+  // 便签要**留下来**：它得跟着会话活，切走再回来还在。排座不用端点，正因为那是临时的
+  // ——排完发出去、关掉就该忘；便签不是。
+  mountNoteApi(ctx, () => requireNotes(ctx))
   ctx.tools.register(defineTool({
     name: STATE_TOOL,
     description: describeTool(),

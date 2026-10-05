@@ -81,6 +81,28 @@ export interface RoomCase {
   readonly roles: readonly RoomCaseRole[]
 }
 
+/**
+ * 一张便签。
+ *
+ * 形状与 `notes.ts` 的 `Note` 一致——这里再写一遍是因为那个文件 import 了 zod 与 storage，
+ * 而浏览器半边引不起它们（打包的纯度门会拒掉 `@deepseek-ai/*`，类型导入也不例外）。
+ * 同一个理由下 `room-types.ts` 这个文件本身就是零依赖的。
+ */
+export interface RoomNote {
+  /** 便签 id。 */
+  readonly id: string
+  /** 序号，自增、删了不回收——它是给人「引用」用的（「便签 3 那条」）。 */
+  readonly seq: number
+  /** 颜色名。 */
+  readonly color: string
+  /** 写的什么。 */
+  readonly text: string
+  /** 相对标签页容器的横坐标。 */
+  readonly x: number
+  /** 相对标签页容器的纵坐标。 */
+  readonly y: number
+}
+
 /** 面板读的那一份快照。 */
 export interface RoomSnapshot {
   /** 当前这一局；还没开局时为 `null`。 */
@@ -91,4 +113,6 @@ export interface RoomSnapshot {
   readonly actors: readonly RoomActor[]
   /** 能选的本子。 */
   readonly cases: readonly RoomCase[]
+  /** 这个会话的便签。 */
+  readonly notes: readonly RoomNote[]
 }

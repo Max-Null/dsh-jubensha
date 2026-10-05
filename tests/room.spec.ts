@@ -9,7 +9,7 @@
  * fence」），本插件按跨插件不许运行时互相 import 的规矩复制了那份逻辑。
  */
 import { describe, expect, it } from 'vitest'
-import { actorAction, isTrusted } from '../src/room.ts'
+import { actorAction, isTrusted, noteAction, subAction } from '../src/room.ts'
 
 /** 一次正常的面板请求：浏览器同源、Host 是本机。 */
 function local(extra: Record<string, string> = {}): Record<string, string> {
@@ -91,5 +91,19 @@ describe('写端点的路径解析', () => {
     // 这一层只管「从路径里切出那一段」，那一段是不是真动作由 handler 的 switch 定。
     // 分开的好处：路径形状能单测，而动作集合变了下这个测试不用动。
     expect(actorAction('/jubensha/actor/nonsense')).toBe('nonsense')
+  })
+
+  it('便签那三个动作认得出，而且两个端点互不认领', () => {
+    for (const action of ['add', 'edit', 'remove']) {
+      expect(noteAction(`/jubensha/note/${action}`)).toBe(action)
+    }
+    // 这一条是要紧的：两个端点只差一个词，认错一个就会拿演员池的动作去打便签池。
+    expect(noteAction('/jubensha/actor/add')).toBeUndefined()
+    expect(actorAction('/jubensha/note/add')).toBeUndefined()
+  })
+
+  it('前缀要整段匹配——/jubensha/actorx 不是 /jubensha/actor', () => {
+    expect(subAction('/jubensha/actorx/add', '/jubensha/actor')).toBeUndefined()
+    expect(subAction('/jubensha/actor/add', '/jubensha/actor')).toBe('add')
   })
 })

@@ -124,6 +124,56 @@ export interface ActorPool {
 }
 
 /**
+ * 插件自带的演员。
+ *
+ * **为什么自带**：空池子里的「随机」没有意义——两个人挑不出花样。而让新用户先自己写六个性格，
+ * 门槛比这个插件该有的高得多：他还没玩过一局，怎么知道该写什么性格。
+ *
+ * **性格按本子的那条判据写**（写成决策偏好，不写形容词；写到「他想选什么，但实际做成了什么」），
+ * 而不是「外向、聪明、多疑」。同一句话，前者能演，后者只是个标签。
+ *
+ * **补齐只补缺的**：`openActorPool` 按 id 判，已经存在的一个字段都不动——用户改过的名字与性格
+ * 是他自己的，不该因为插件升级被覆盖回去。
+ */
+const PRESET_ACTORS: readonly { readonly id: string, readonly name: string, readonly style: string }[] = [
+  {
+    id: 'laomao',
+    name: '老猫',
+    style: '话密，但不透底。他喜欢用「我跟你说」起头，把真话掺在闲聊里讲——听起来像随口一提，'
+      + '其实挑过。他极少正面撒谎，可被他聊过去的事，事后回想总差一块。',
+  },
+  {
+    id: 'azhen',
+    name: '阿珍',
+    style: '先照顾人、把场面兜住，一旦觉得被敷衍，翻脸比谁都快。别人的好与坏她都记账，账目很清楚'
+      + '——她不会当场拿账，但会在该用的时候正好想起来。',
+  },
+  {
+    id: 'laosun',
+    name: '老孙',
+    style: '凡事要捋顺逻辑，别人越激动他越冷静。可他自己被戳到痛处时会突然哑火，过一会儿再绕回来，'
+      + '装作刚才那一下没发生。',
+  },
+  {
+    id: 'xiaohe',
+    name: '小何',
+    style: '急着证明自己看出来了，爱抢话、爱下结论。说错了会先硬撑一句，再悄悄改口——他不承认改口，'
+      + '但话里的版本已经换了。',
+  },
+  {
+    id: 'tiege',
+    name: '铁哥',
+    style: '话少而重，一开口就是定论。他护着自己人，方式是不提他们——越是要紧的人，他嘴里越没有。',
+  },
+  {
+    id: 'baijie',
+    name: '白姐',
+    style: '专看别人怎么说话的人，习惯反问。她不太讲自己的事，除非能换来等量的东西；而她换东西的时候'
+      + '很直白，不绕。',
+  },
+]
+
+/**
  * 演员池落在哪。
  *
  * 跟 `dsh-memory` 的 `memory.json` 同目录——一个宿主 home 一份，**跟着人走而不是跟着工作区
@@ -148,6 +198,15 @@ export async function openActorPool(ctx: Context): Promise<ActorPool> {
   const facility = new DomainFacility(ctx, { backend: 'jubensha_actors', routes: {} })
   const domain = await facility.open(actorSpec)
   const table = domain.table('actors')
+
+  // 补齐自带的那几位。**只补缺的**：已经存在的（用户改过名字、改过性格、攒了印象的）一个字段
+  // 都不动——那是他自己的东西，不该因为插件升级被覆盖回去。
+  for (const preset of PRESET_ACTORS) {
+    if (table.get(preset.id) === undefined) {
+      const seeded: Actor = { id: preset.id, name: preset.name, style: preset.style, notes: [] }
+      await table.put(preset.id, seeded)
+    }
+  }
 
   // `KvTable` 是**同步读、异步写**：`get` / `entries` 直接从内存里给，`put` / `update` 才等落盘。
   // 所以下面这些方法包一层 Promise 只是为了让调用方不必记住哪一半是同步的。

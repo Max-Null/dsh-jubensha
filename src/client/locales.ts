@@ -35,6 +35,8 @@ export const zh = {
   'mid.clues': '线索',
   'mid.cases': '可选的本子',
   'mid.pending': '这一页的内容要从对话里来，还没接上——右栏已经在读了。',
+  'mid.shuffle': '随机排',
+  'mid.shuffleHint': '从演员池里随机挑，整桌重排',
   'mid.clueSealed': '（还没发到桌上）',
   'mid.noGame': '还没开局。在对话里让主持人开一局，这里就会显示局面。',
 
@@ -119,6 +121,8 @@ export const en = {
   'mid.clues': 'Clues',
   'mid.cases': 'Cases',
   'mid.pending': 'This page reads from the conversation — not wired up yet. The right column already is.',
+  'mid.shuffle': 'Shuffle',
+  'mid.shuffleHint': 'pick at random from the actor pool, re-seating the whole table',
   'mid.clueSealed': '(not dealt yet)',
   'mid.noGame': 'No game yet. Ask the host in the conversation to start one, and the table shows up here.',
 

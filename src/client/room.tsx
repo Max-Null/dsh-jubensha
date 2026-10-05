@@ -328,6 +328,31 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
         : [{ seat: role.id, roleName: role.name, actorId: actor.id, actorName: actor.name }]
     })
 
+  /**
+   * 把池子里的人随机分给这一桌的 AI 位子。
+   *
+   * **整桌重排，不是只补空位**——点「随机」就是要把挑好的换掉；只补空位会让人以为按钮坏了。
+   * 用 Fisher-Yates 而不是 `sort(() => Math.random() - 0.5)`：后者不是洗牌，多数引擎下分布偏。
+   * @param one - 要给哪个本子排座。
+   */
+  const shuffle = (one: RoomCase): void => {
+    const pool = snapshot.actors.map(actor => actor.id)
+    for (let i = pool.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const held = pool[i]!
+      pool[i] = pool[j]!
+      pool[j] = held
+    }
+    const next: Record<string, string> = {}
+    one.roles.filter(role => role.player === 'ai').forEach((role, index) => {
+      const pick = pool.length === 0 ? undefined : pool[index % pool.length]
+      // 池子比座位少时宁可让位子空着，也不让同一个人坐两个位子——一个人演三个角色在物理上
+      // 就不可能，而那种排法到了桌上才发现。
+      if (pick !== undefined) next[`${one.id}:${role.id}`] = pick
+    })
+    setCast(next)
+  }
+
   return <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px' }}>
     <h2 style={{ fontSize: '14px', margin: '0 0 4px', fontWeight: 600 }}>{t('mid.noGame')}</h2>
     <Heading>{t('mid.cases')}</Heading>
@@ -342,6 +367,18 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
         </div>
         {chosen === one.id
           ? <div style={{ marginLeft: '20px', marginTop: '5px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '9px', marginBottom: '7px' }}>
+              <button
+                type="button"
+                onClick={() => shuffle(one)}
+                style={{
+                  font: 'inherit', fontSize: '12px', padding: '3px 11px', borderRadius: '7px', cursor: 'pointer',
+                  border: '1px solid var(--dsw-accent, #4a7fd4)',
+                  background: 'transparent', color: 'var(--dsw-accent, #4a7fd4)',
+                }}
+              >{t('mid.shuffle')}</button>
+              <span style={{ fontSize: '11.5px', opacity: 0.6 }}>{t('mid.shuffleHint')}</span>
+            </div>
             {one.roles.filter(role => role.player === 'ai').map(role => <div
               key={role.id}
               style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '3px' }}

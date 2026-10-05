@@ -12,9 +12,12 @@
  *
  * @module @max-null/dsh-jubensha/client/notes
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RoomNote } from '../room-types.ts'
+
+/** 房间页根节点上的标记——右键落在它里面才算「在房间里留便签」。 */
+export const ROOM_ATTR = 'data-jubensha-room'
 
 /** 九色。白底排第一格——它在这套界面里最隐蔽。 */
 const FILL: Record<string, string> = {
@@ -82,27 +85,37 @@ export function NoteLayer({ t, sessionId, notes, onChanged, onProblem }: NoteLay
   }
 
   /** 右键落在页面上（不是落在便签上）时弹色板。 */
-  const openMenu = (event: React.MouseEvent): void => {
+  const openMenu = (event: MouseEvent): void => {
+    const root = document.querySelector(`[${ROOM_ATTR}]`)
+    if (root === null || !root.contains(event.target as Node)) return
+    // 便签自己不吃右键（那一下留给"撕掉"之类以后可能加的东西）。
     if ((event.target as HTMLElement).closest('[data-note]') !== null) return
     event.preventDefault()
-    const box = event.currentTarget.getBoundingClientRect()
+    const box = root.getBoundingClientRect()
     setMenu({ x: event.clientX - box.left, y: event.clientY - box.top })
   }
 
+  // 监听挂在 **document** 上，不是这个层上：容器为了不吃三栏的点击用了
+  // `pointer-events: none`，于是落在三栏上的右键根本到不了这个层的 handler——
+  // 那是个只有真点一下才会发现的坑。挂在 document 上、再按房间页的范围过滤，
+  // 既不挡下层，也收得到。
+  useEffect(() => {
+    const closeMenu = (): void => setMenu(null)
+    document.addEventListener('contextmenu', openMenu)
+    // 点别处也要收起色板——同一个理由挂 document：这个层自己收不到点击。
+    document.addEventListener('click', closeMenu)
+    return () => {
+      document.removeEventListener('contextmenu', openMenu)
+      document.removeEventListener('click', closeMenu)
+    }
+  })
+
   return <div
-    onContextMenu={openMenu}
-    onClick={() => setMenu(null)}
     style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
   >
     {notes.map(note => <div
       key={note.id}
       data-note={note.id}
-      contentEditable
-      suppressContentEditableWarning
-      onBlur={(event) => {
-        const text = event.currentTarget.textContent ?? ''
-        if (text !== note.text) void guard(() => post('edit', { session: sessionId, id: note.id, text }))
-      }}
       onMouseDown={(event) => {
         // 拖它挪位置。**写盘只在松手时**——拖一下几十个 mousemove，每个都写一遍是白费。
         if ((event.target as HTMLElement).dataset['kill'] !== undefined) return
@@ -171,7 +184,17 @@ export function NoteLayer({ t, sessionId, notes, onChanged, onProblem }: NoteLay
         onClick={() => void guard(() => post('remove', { session: sessionId, id: note.id }))}
         style={{ position: 'absolute', right: '6px', bottom: '3px', cursor: 'pointer', opacity: 0.45, fontSize: '11px' }}
       >✕</span>
-      {note.text}
+      {/* 只有这一段可编辑。序号与 ✕ 是它的**兄弟**，不是子节点——它们在编辑区外，
+          所以全选之后打字不会把它们一起抹掉。 */}
+      <div
+        contentEditable
+        suppressContentEditableWarning
+        onBlur={(event) => {
+          const text = event.currentTarget.textContent ?? ''
+          if (text !== note.text) void guard(() => post('edit', { session: sessionId, id: note.id, text }))
+        }}
+        style={{ outline: 'none', minHeight: '18px', cursor: 'inherit' }}
+      >{note.text}</div>
     </div>)}
 
     {menu !== null
@@ -186,6 +209,7 @@ export function NoteLayer({ t, sessionId, notes, onChanged, onProblem }: NoteLay
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 24px)', gap: '6px' }}>
           {Object.entries(FILL).map(([color, fill]) => <span
             key={color}
+            data-swatch={color}
             onClick={() => {
               const at = { x: menu.x, y: menu.y }
               setMenu(null)

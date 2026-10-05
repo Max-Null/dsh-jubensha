@@ -299,7 +299,7 @@ export function RoomView({
     PHASES.includes(snapshot.game?.phase as Phase) ? snapshot.game?.phase as Phase : 'self-intro',
   )
 
-  return <div style={{ position: 'relative', minHeight: '100%' }}>
+  return <div data-jubensha-room="" style={{ position: 'relative', minHeight: '100%' }}>
     <div style={{ display: 'flex', gap: '4px', padding: '10px 20px 8px', flexWrap: 'wrap' }}>
       {PHASES.map(one => <button
         key={one}

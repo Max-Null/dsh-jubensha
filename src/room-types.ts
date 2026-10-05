@@ -104,6 +104,16 @@ export interface RoomCaseRole {
   readonly public: string
 }
 
+/** 一条人物关系——关系图上的那根线。 */
+export interface RoomCaseRelation {
+  /** 从谁。写的是**名字**：图上除了角色还有死者，而死者没有座位号。 */
+  readonly from: string
+  /** 到谁。 */
+  readonly to: string
+  /** 什么关系，一句话。 */
+  readonly label: string
+}
+
 /** 一个能选的本子。 */
 export interface RoomCase {
   /** 本子编号。 */
@@ -120,6 +130,8 @@ export interface RoomCase {
   readonly path: string
   /** 每个位子演谁——布置面板按它排座，也按它算要几个 AI 玩家。 */
   readonly roles: readonly RoomCaseRole[]
+  /** 人物关系（关系图的线）。本子没写时是空的。 */
+  readonly relations: readonly RoomCaseRelation[]
 }
 
 /**

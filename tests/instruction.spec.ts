@@ -25,6 +25,10 @@ const ENTRY: RoomCase = {
     { id: 'p2', name: '马丽', player: 'ai', public: '41 岁，做老照片生意。' },
     { id: 'p3', name: '苏小满', player: 'ai', public: '24 岁，老周的学徒。' },
   ],
+  relations: [
+    { from: '周德明', to: '林默', label: '叔侄' },
+    { from: '周德明', to: '陈建国', label: '棋友三十年' },
+  ],
 }
 
 /** 三个 AI 位子上的演员。 */

@@ -16,7 +16,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadCase } from './case.ts'
+import { loadCase, sceneRelations } from './case.ts'
 import type { RoomCase } from './room-types.ts'
 
 /**
@@ -65,6 +65,7 @@ export function listCases(): readonly CaseEntry[] {
           player: role.player,
           public: role.publicIdentity,
         })),
+        relations: sceneRelations(loaded).map(one => ({ ...one })),
       })
     } catch {
       // 坏本子跳过。`loadCase` 已经会为格式问题抛 `CaseFormatError`，

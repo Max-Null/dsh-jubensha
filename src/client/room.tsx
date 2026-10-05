@@ -20,7 +20,7 @@
  */
 import { useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { RoomCase, RoomSnapshot } from '../room-types.ts'
+import type { RoomCase, RoomCaseRelation, RoomSnapshot } from '../room-types.ts'
 import { avatarSvg } from '../avatar.ts'
 import { openingInstruction } from '../instruction.ts'
 
@@ -52,6 +52,73 @@ export function Face({ id, avatar, size = 30 }: { id: string; avatar?: string; s
   if (avatar !== undefined) return <img src={avatar} alt="" style={{ ...style, objectFit: 'cover' }} />
   // 内容是按 id 生成的几何图形、不含任何外部输入——这正是它敢用 innerHTML 的理由。
   return <span style={style} dangerouslySetInnerHTML={{ __html: avatarSvg(id, size) }} />
+}
+
+/**
+ * 关系图：死者居中，其余人排在四周，线按本子的 `relations` 画。
+ *
+ * **为什么不从 `scene.party` 推**：那是一句自由文本（「老陈 · 陈建国，61 岁，退休邮递员，
+ * 老周三十年的棋友」），要连线就得先知道哪半句是名字、哪半句是关系——那是在解析自然语言。
+ * 本子把这件事写清楚，这里只负责摆位置。
+ *
+ * 摆法是最简单的那种：中心一个、圆周上均分。关系是任意的图（两个角色之间也可能有线），
+ * 而放射布局对"以某人为中心"的一局人来说够用，也不必引一个力导向库进来。
+ * @param props - 关系、中心的那个人（死者）与图上要出现的人。
+ * @returns 一张 SVG。
+ */
+function RelationGraph({ relations, center, names }: {
+  relations: readonly RoomCaseRelation[]
+  center: string
+  names: readonly string[]
+}) {
+  const width = 258
+  const height = 232
+  const midX = width / 2
+  const midY = height / 2
+  const others = names.filter(one => one !== center)
+  /** 某个人摆在哪儿。中心那个就摆在正中。 */
+  const at = (name: string): { x: number; y: number } => {
+    if (name === center) return { x: midX, y: midY }
+    const index = others.indexOf(name)
+    if (index < 0) return { x: midX, y: midY }
+    // `-π/2` 让第一个落在正上方，然后顺时针均分。
+    const angle = (index / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2
+    return { x: midX + Math.cos(angle) * 92, y: midY + Math.sin(angle) * 84 }
+  }
+  const known = new Set([center, ...others])
+
+  return <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto' }}>
+    {relations.map((one, index) => {
+      // 线两头都得在图上——本子里写了别人不在场，那条线画不出来。
+      if (!known.has(one.from) || !known.has(one.to)) return null
+      const from = at(one.from)
+      const to = at(one.to)
+      return <g key={`e${index}`}>
+        <line
+          x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+          stroke="var(--dsw-border-subtle, rgba(127,127,127,0.5))"
+          strokeWidth={1.2}
+        />
+        {one.label === '' ? null : <text
+          x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 - 3}
+          textAnchor="middle" style={{ fontSize: '9px', fill: 'currentColor', opacity: 0.7 }}
+        >{one.label}</text>}
+      </g>
+    })}
+    {[center, ...others].map((name) => {
+      const { x, y } = at(name)
+      return <g key={name}>
+        <rect
+          x={x - 31} y={y - 15} width={62} height={30} rx={8}
+          fill="var(--dsw-surface-sunken, rgba(127,127,127,0.10))"
+          stroke="var(--dsw-border-subtle, rgba(127,127,127,0.28))"
+        />
+        <text x={x} y={y + 4} textAnchor="middle" style={{ fontSize: '10.5px', fill: 'currentColor' }}>
+          {name}
+        </text>
+      </g>
+    })}
+  </svg>
 }
 
 /**
@@ -94,16 +161,28 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
 
     <section style={{ marginBottom: '18px' }}>
       <Heading>{t('left.relations')}</Heading>
-      {/* 关系图要「谁与谁、什么关系」这种形状，而本子里 `scene.party` 是自由文本
-          （「老陈 · 陈建国，61 岁，退休邮递员，老周三十年的棋友」）。所以先按角色列出人，
-          连线等本子那一侧补上结构化字段再做——见界面设计 §5 第 4 条。 */}
-      <div style={{ fontSize: '12px' }}>
-        {(caseEntry?.roles ?? []).map(role => <div key={role.id} style={{ padding: '2px 0' }}>
-          <b>{role.name}</b>
-          <span style={{ color: 'inherit', opacity: 0.65 }}>　{role.public}</span>
-        </div>)}
-        {caseEntry === undefined ? <div style={{ opacity: 0.6 }}>—</div> : null}
-      </div>
+      {(() => {
+        const relations = caseEntry?.relations ?? []
+        const victimName = game?.victim?.name ?? ''
+        if (relations.length === 0) {
+          // 本子没写 relations 时退回人名单：画不出线就老实列人，而不是画一张没有线的"图"。
+          return <div style={{ fontSize: '12px' }}>
+            {(caseEntry?.roles ?? []).map(role => <div key={role.id} style={{ padding: '2px 0' }}>
+              <b>{role.name}</b>
+              <span style={{ opacity: 0.65 }}>　{role.public}</span>
+            </div>)}
+            {caseEntry === undefined ? <div style={{ opacity: 0.6 }}>—</div> : null}
+          </div>
+        }
+        // 图上要出现的人：本子里写过关系的、还有死者。本子提到但不在座位上的名字也画——
+        // 那是本子有意提的人（比如只在关系里出现的旧识）。
+        const names = [...new Set([
+          ...(victimName === '' ? [] : [victimName]),
+          ...(caseEntry?.roles ?? []).map(role => role.name),
+          ...relations.flatMap(one => [one.from, one.to]),
+        ])]
+        return <RelationGraph relations={relations} center={victimName} names={names} />
+      })()}
     </section>
 
     <section>

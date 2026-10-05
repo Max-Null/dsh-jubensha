@@ -9,7 +9,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CaseFormatError, bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, tableClues } from '../src/case.ts'
+import { CaseFormatError, bookPreview, bookRef, bookRefSeat, loadCase, openBeforeReveal, pickBookRef, roleBook, sceneRelations, sceneVictim, tableClues } from '../src/case.ts'
 
 /** 一份真实本子的 YAML 版——`tests/fixtures/case-03.yml` 的文件头写了它为什么存在。 */
 function fixture(): string {
@@ -377,5 +377,59 @@ describe('角色本封存期给 DM 看的那一行', () => {
     expect(preview).toContain(role.publicIdentity)
     expect(preview).not.toContain(role.privateHistory.slice(0, 12))
     expect(preview).not.toContain(role.secret.slice(0, 12))
+  })
+})
+
+/**
+ * 造一份最小可用的本子：只用来测「界面要的那两块读法」。
+ *
+ * `scene` 由调用方给——这样每条用例能写出它要的那个形状（空的 victim、断了一条的关系），
+ * 而不必去改真本子，也不必依赖某一个 fixture 恰好长成什么样。
+ * @param scene - `scene:` 之下的那几行。
+ * @returns 一份能过加载器的本子。
+ */
+function tinyCase(scene: string): string {
+  return [
+    'meta: { genre: drama, id: "99", title: "试", players: 2, human_slots: 1 }',
+    'scene:',
+    scene,
+    'roles:',
+    '  - { id: p0, name: "甲", player: human }',
+    '  - { id: p1, name: "乙", player: ai }',
+  ].join('\n')
+}
+
+describe('死者与关系：两块给界面用的读法', () => {
+  it('死者读得出来', () => {
+    const victim = sceneVictim(loadCase(fixture01()))
+    expect(victim?.name).toBe('周德明')
+    expect(victim?.age).toBe(58)
+    expect(victim?.cause).toContain('后脑')
+    expect(victim?.timeWindow).toEqual(['21:30', '22:30'])
+  })
+
+  it('情感本没有案件时给 null——不是抛，也不是一个空壳', () => {
+    // case-03 的 scene.victim 是 `{}`，那是情感本的正常写法。
+    expect(sceneVictim(loadCase(tinyCase('  setup: "占位"\n  victim: {}')))).toBeNull()
+  })
+
+  it('关系读得出来：四条线，两头都有名字', () => {
+    const relations = sceneRelations(loadCase(fixture01()))
+    expect(relations).toHaveLength(4)
+    expect(relations[0]).toEqual({ from: '周德明', to: '林默', label: '叔侄' })
+  })
+
+  it('本子没写 relations 时给空数组——图画不出来不该让整个左栏不显示', () => {
+    expect(sceneRelations(loadCase(fixture02()))).toEqual([])
+  })
+
+  it('缺一头的条目直接跳过：留一条连不上人的线，画出来只是个悬空的标签', () => {
+    const loaded = loadCase(tinyCase([
+      '  setup: "占位"',
+      '  relations:',
+      '    - { from: "甲", to: "乙", label: "同乡" }',
+      '    - { from: "甲", label: "断了" }',
+    ].join('\n')))
+    expect(sceneRelations(loaded)).toEqual([{ from: '甲', to: '乙', label: '同乡' }])
   })
 })

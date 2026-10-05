@@ -211,6 +211,36 @@ export function sceneVictim(loaded: LoadedCase): SceneVictim | null {
   }
 }
 
+/** 一条人物关系。 */
+export interface SceneRelation {
+  /** 从谁。写的是**名字**——图上除了角色还有死者，而死者没有座位号。 */
+  readonly from: string
+  /** 到谁。 */
+  readonly to: string
+  /** 什么关系，一句话。 */
+  readonly label: string
+}
+
+/**
+ * 从本子里取人物关系。
+ *
+ * **宽空地取**：缺字段的条目跳过、整段缺失给空数组——关系图少一条线，好过整个左栏不显示。
+ * 两头都得有名字才留：留一条连不上任何人的线，画出来只是个悬空的标签。
+ * @param loaded - 加载好的本子。
+ * @returns 关系列表；本子没写时为 `[]`。
+ */
+export function sceneRelations(loaded: LoadedCase): SceneRelation[] {
+  const raw = record(loaded.sections['scene'])['relations']
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((item): SceneRelation[] => {
+    const entry = record(item)
+    const from = text(entry['from'])
+    const to = text(entry['to'])
+    if (from === '' || to === '') return []
+    return [{ from, to, label: text(entry['label']) }]
+  })
+}
+
 /** ref 的前缀。`roleBook` 靠它分辨手里那串是引用还是正文。 */export const BOOK_REF_PREFIX = 'book:'
 
 /**

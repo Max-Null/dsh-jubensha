@@ -85,6 +85,23 @@ export function Face({ id, avatar, size = 30 }: { id: string; avatar?: string; s
 }
 
 /**
+ * 登录头像——页面上左下角那个。
+ *
+ * **从页面上读，而不是去问某个服务。** 那个 URL 归 DSH 的账户插件管，而它的读取口
+ * （`useAccount`）是 provide 给「设置」那一处的 hook——别的插件拿不到，`AccountProfile`
+ * 又是客户端与宿主之间那条链上的东西。页面上那枚元素于是成了它唯一的公开呈现，判据是 `src`
+ * 里那段 `user-avatar`：那是 DeepSeek 的头像地址，不随布局改。
+ *
+ * 读不到就给 `undefined`，调用方退回按 id 生成的那张脸（那是缺省行为）。
+ * @returns 头像 URL；没登录、或者页面还没把它渲染出来时给 `undefined`。
+ */
+function loginAvatar(): string | undefined {
+  const image = document.querySelector<HTMLImageElement>('img[src*="user-avatar"]')
+  const src = image?.src
+  return src === undefined || src === '' ? undefined : src
+}
+
+/**
  * 关系图：死者居中，其余人排在四周，线按本子的 `relations` 画。
  *
  * **为什么不从 `scene.party` 推**：那是一句自由文本（「老陈 · 陈建国，61 岁，退休邮递员，
@@ -408,10 +425,15 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
                   : undefined
           return <div key={seat} style={{ display: 'flex', alignItems: 'center', gap: '9px', padding: '5px 0' }}>
             <span style={{ opacity: 0.6, width: '20px', fontSize: '11px' }}>{seat}</span>
-            {/* 头像按**演员**生成——同一个人换本子还是那张脸。没上桌就没有演员，给个灰块。 */}
-            {sitting === undefined
-              ? <span style={{ width: '30px', height: '30px', borderRadius: '8px', flex: 'none', background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.12))' }} />
-              : <Face id={seat} />}
+            {/* 头像按**演员**生成——同一个人换本子还是那张脸。没上桌就没有演员，给个灰块。
+                **真人那位用他自己登录的头像**：这一栏是「谁坐在那儿」，而他就是你。
+                判据是 `mine` 而不是 `sitting`——`players` 表里只有 spawn 过的 AI，真人从来不在
+                里面，照着它判会把真人位永远画成灰块。 */}
+            {mine
+              ? <Face id={seat} avatar={loginAvatar()} />
+              : sitting === undefined
+                ? <span style={{ width: '30px', height: '30px', borderRadius: '8px', flex: 'none', background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.12))' }} />
+                : <Face id={seat} />}
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <b>{sitting?.name ?? role?.name ?? seat}</b>

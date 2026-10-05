@@ -16,6 +16,10 @@ import { join } from 'node:path'
 // 本模块**不**把它们写进 inject：缺哪一样都该只让对应的动作报错，而不是整个插件不加载——
 // 取服务一律走运行时的 ctx.get。
 import type { Agent } from '@deepseek-ai/dsh-agent'
+// `SessionId` 是个 brand 函数（值，不是类型）——`agents.get()` 要的就是它。所以这一条是
+// `peerDependencies` 而不是只放 devDependencies：那个包的类型导入一直都在这儿，而值导入要一条
+// 真的 peer 声明。
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SpawnTeammateResult } from '@deepseek-ai/dsh-experimental-agent-team'
 import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -31,6 +35,7 @@ import { openNotePool } from './notes.ts'
 import type { NotePool } from './notes.ts'
 import { mountActorApi, mountCaseDirApi, mountNoteApi, mountRoomApi } from './room.ts'
 import type { RoomSnapshot } from './room.ts'
+import type { RoomTableRow } from './room-types.ts'
 import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
 
@@ -400,6 +405,45 @@ function confine(agent: Agent, seat: string): void {
 }
 
 /**
+ * 桌上那几位此刻的状态。
+ *
+ * 三样拼起来（都是读，没有副作用）：
+ * 1. **谁在这桌上**——`agentTeams.listMembers(lead)` 给名册行，每行自带 `status`；
+ * 2. **那个 lead 的 Agent**——`agents.get(sessionId)`；`listMembers` 要的是活的 Agent
+ *    （它的注释写着「exact live Agent used as the authority credential」），而端点这边只有
+ *    会话 id，所以这一跳是必要的；
+ * 3. **座位**——从成员名的前缀取。成员名是 `p1-m3k8f2a` 那种（宿主的 `teammateName` 拼的），
+ *    前缀就是 `spawn` 时传的座位。
+ *
+ * 服务不在时给空数组而不是抛：**没开团队、或者 DSH 没装那一半，这一格就该是空的**——房间的
+ * 其余部分照常能用（`players` 那张表本来就来自我们自己的局面，与 Team 无关）。
+ *
+ * @param ctx - 插件上下文（要 `agents` 与 `agentTeams` 两个可选服务）。
+ * @param sessionId - 领队会话 id。
+ * @returns 每位 AI 玩家的状态；读不到就给空数组。
+ */
+function tableOf(ctx: Context, sessionId: string): RoomTableRow[] {
+  const teams = ctx.get('agentTeams')
+  const agents = ctx.get('agents')
+  if (teams === undefined || agents === undefined) return []
+  const lead = agents.get(SessionId(sessionId))
+  if (lead === undefined) return []
+  const rows: RoomTableRow[] = []
+  for (const member of teams.listMembers(lead)) {
+    if (member.role !== 'teammate') continue
+    // `TeamMemberView.status` 一个字段就够做这件事：`running` 是在生成、`inactive` 是在桌上
+    // 但没在跑、另外两个是上桌的过程与结果。（`phase` 是**另一个**接口 `TeamMemberProjection`
+    // 上的，那是持久生命周期——两处别混。）
+    rows.push({
+      seat: member.name.split('-')[0] ?? member.name,
+      running: member.status === 'running',
+      phase: member.status === 'provisioning' || member.status === 'failed' ? member.status : 'active',
+    })
+  }
+  return rows
+}
+
+/**
  * 从名册行取回 agent 再收窄。拿不到就抛——静默放过等于让一位不受限的玩家坐上了桌。
  * @param ctx - 插件上下文，用来取 agent 注册表。
  * @param member - `spawnTeammate` 返回的名册行。
@@ -555,6 +599,9 @@ export function apply(ctx: Context): void {
         script: scriptRole === undefined ? '' : roleBook(scriptRole),
       },
       players: players.list().map(player => ({ seat: player.seat, name: player.name })),
+      // 桌上那几位此刻在干什么。**它每次轮询都重新算**——那正是它存在的理由：`players` 是
+      // 「谁在桌上」（开局就定了），而这一份说谁正忙着生成、谁还没上桌。
+      table: tableOf(ctx, sessionId),
       // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，
       // 收益不抵。四本本子的 YAML 解析是毫秒级的事。
       cases: [...listCases((await requireCaseDirs(ctx)).list())],

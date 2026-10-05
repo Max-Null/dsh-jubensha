@@ -394,6 +394,18 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
           const sitting = snapshot.players.find(player => player.seat === seat)
           const mine = seat === game?.humanSeat
           const role = roleOf(seat)
+          // 这一刻的状态。**它优先于「还没上桌」那三个字**：正在上桌、上桌失败、此刻在生成
+          // ——三样都比一句静态的话有信息。没开团队时这一份是空的，那就退回原来的显示。
+          const row = snapshot.table.find(one => one.seat === seat)
+          const status = row === undefined
+            ? undefined
+            : row.phase === 'provisioning'
+              ? { text: t('left.provisioning'), busy: false }
+              : row.phase === 'failed'
+                ? { text: t('left.seatFailed'), busy: false }
+                : row.running
+                  ? { text: t('left.thinking'), busy: true }
+                  : undefined
           return <div key={seat} style={{ display: 'flex', alignItems: 'center', gap: '9px', padding: '5px 0' }}>
             <span style={{ opacity: 0.6, width: '20px', fontSize: '11px' }}>{seat}</span>
             {/* 头像按**演员**生成——同一个人换本子还是那张脸。没上桌就没有演员，给个灰块。 */}
@@ -401,7 +413,23 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
               ? <span style={{ width: '30px', height: '30px', borderRadius: '8px', flex: 'none', background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.12))' }} />
               : <Face id={seat} />}
             <span style={{ flex: 1, minWidth: 0 }}>
-              <b>{sitting?.name ?? role?.name ?? seat}</b>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <b>{sitting?.name ?? role?.name ?? seat}</b>
+                {status === undefined
+                  ? null
+                  : <span style={{ fontSize: '10.5px', opacity: 0.75, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    {/* 「正在想」给一个呼吸的圆点——那一栏里唯一会自己变的东西值得一个亮点，
+                        而其余两种状态是静止的，不抢眼。 */}
+                    {status.busy
+                      ? <span aria-hidden style={{
+                        width: '5px', height: '5px', borderRadius: '50%', flex: 'none',
+                        background: 'var(--dsw-accent, #4a7fd4)',
+                        animation: 'jubensha-breathe 1.4s ease-in-out infinite',
+                      }} />
+                      : null}
+                    {status.text}
+                  </span>}
+              </span>
               <span style={{ display: 'block', opacity: 0.65, fontSize: '11.5px' }}>
                 {role?.public ?? ''}
               </span>
@@ -785,6 +813,9 @@ export function RoomView({
     display: 'flex',
     flexDirection: 'column',
   }}>
+    {/* 状态点的呼吸动画。放在这一层是因为它要给左栏用，而左栏总是渲染着——弹窗里那两段
+        （淡入、放大）只在弹窗存在时才有用，所以留在那儿。 */}
+    <style>{'@keyframes jubensha-breathe { 0%, 100% { opacity: 0.3 } 50% { opacity: 1 } }'}</style>
     {/* 阶段条。**没开局就整条不出现**——那时没有阶段可言，摆一条能点的横排只会让人以为
         自己漏了什么（用户提的就是这个）。走到哪亮到哪，而只有**已经走过的**能点：那一下是
         「回看」，不是「跳步」。没走到的点不动——否则可以一开局就点「复盘」，把整局推理跳掉。 */}

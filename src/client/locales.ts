@@ -32,6 +32,9 @@ export const zh = {
   'left.you': '你',
   'left.dead': '死者',
   'left.notSeated': '还没上桌',
+  'left.thinking': '正在想…',
+  'left.provisioning': '正在上桌…',
+  'left.seatFailed': '上桌失败',
   'left.nothingSaid': '其余时段还没有人交代',
 
   // 中栏
@@ -128,6 +131,9 @@ export const en = {
   'left.you': 'you',
   'left.dead': 'the deceased',
   'left.notSeated': 'not seated',
+  'left.thinking': 'thinking…',
+  'left.provisioning': 'joining…',
+  'left.seatFailed': 'failed to join',
   'left.nothingSaid': 'the rest of the night is still unaccounted for',
 
   'mid.script': 'Your script',

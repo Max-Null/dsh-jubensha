@@ -74,6 +74,20 @@ export interface RoomPlayer {
   readonly name: string
 }
 
+/**
+ * 桌上一位玩家**此刻**的状态。宿主从 Team 的名单里读出来（见 `index.ts` 的 `tableOf`）。
+ *
+ * 它是「发言人之外」的信息：右栏说谁说了什么，而这一份说谁**正忙着**、谁还没上桌。
+ */
+export interface RoomTableRow {
+  /** 座位 id。 */
+  readonly seat: string
+  /** 这一刻他在不在生成。 */
+  readonly running: boolean
+  /** 还在上桌 / 已经在桌上 / 上桌失败。 */
+  readonly phase: 'provisioning' | 'active' | 'failed'
+}
+
 /** 演员池里的一位。 */
 export interface RoomActor {
   /** 演员 id。 */
@@ -162,6 +176,13 @@ export interface RoomSnapshot {
   readonly game: RoomGame | null
   /** 桌上的 AI 玩家。 */
   readonly players: readonly RoomPlayer[]
+  /**
+   * 桌上每位玩家**此刻**的状态。
+   *
+   * 与 `players` 是两件事：那一份是「谁在桌上」（开局时就定了），这一份是「他们现在在干什么」
+   * ——而它每一次轮询都可能是新的。没开团队、或者 Team 服务不在时给空数组。
+   */
+  readonly table: readonly RoomTableRow[]
   /** 演员池。 */
   readonly actors: readonly RoomActor[]
   /** 能选的本子。 */

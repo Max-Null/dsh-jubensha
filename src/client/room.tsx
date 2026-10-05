@@ -241,10 +241,16 @@ function RelationDialog({ relations, center, people, onClose, t }: Locale & {
               width: '100%', height: '100%', boxSizing: 'border-box',
               display: 'flex', flexDirection: 'column', justifyContent: 'center',
               padding: '5px 10px', borderRadius: '10px',
-              background: isCenter
-                ? 'var(--dsw-surface-sunken, rgba(127,127,127,0.16))'
-                : 'var(--dsw-surface-sunken, rgba(127,127,127,0.09))',
-              border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.3))',
+              // **底色必须不透明。** 连线画到的是节点中心，所以它必然伸进卡片里一半；底色
+              // 半透明时那条线会透出来，看着像「线穿过了卡片」（用户报的）。层次改用边框加
+              // 阴影来表达，而不靠透明度——中心那张靠字体加粗与边框加深来突出。
+              background: 'var(--dsw-surface, #fff)',
+              border: isCenter
+                ? '1px solid var(--dsw-border-strong, rgba(127,127,127,0.5))'
+                : '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.3))',
+              boxShadow: isCenter
+                ? '0 2px 8px rgba(0,0,0,0.13)'
+                : '0 1px 3px rgba(0,0,0,0.08)',
               textAlign: 'center', overflow: 'hidden',
             }}>
               <div style={{ fontSize: isCenter ? '12.5px' : '12px', fontWeight: 600, lineHeight: 1.3 }}>

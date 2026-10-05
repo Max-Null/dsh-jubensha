@@ -96,59 +96,76 @@ export function Face({ id, avatar, size = 30 }: { id: string; avatar?: string; s
  * @param props - 关系、中心的那个人（死者）与图上要出现的人。
  * @returns 一张 SVG。
  */
-function RelationGraph({ relations, center, names }: {
+/**
+ * 人物关系：**中心一行，其余每行一个**。
+ *
+ * 前后试过两版图形布局，都撞：
+ * · 正圆星形（中心在正中、其余按角度均分）——半径一大就出界、一小就重叠，中间没有可调的空档；
+ * · 错开的树形（中心在上、其余两列往下走）——四条线的标签全落在中心附近那一小片，堆成一团。
+ *
+ * 根因是**这块地方只有 258px 宽**：「一个中心 + 四个节点 + 四条带字的连线」在这个宽度里无论
+ * 怎么排都会打架——图上要放的东西比地方多。所以换掉图形，改成列表：一行一个人，名字在左、
+ * 关系在右。它读起来仍然是「**其余每个人都是与他的关系**」，而那个意思原本就该由列表承担，
+ * 用不着靠几何去表达。
+ *
+ * @param props - 关系列表、中心那个人、以及本子里所有角色名。
+ * @returns 关系表。
+ */
+function RelationGraph({ relations, center, names, t }: Locale & {
   relations: readonly RoomCaseRelation[]
   center: string
   names: readonly string[]
 }) {
-  const width = 258
-  const height = 232
-  const midX = width / 2
-  const midY = height / 2
-  const others = names.filter(one => one !== center)
-  /** 某个人摆在哪儿。中心那个就摆在正中。 */
-  const at = (name: string): { x: number; y: number } => {
-    if (name === center) return { x: midX, y: midY }
-    const index = others.indexOf(name)
-    if (index < 0) return { x: midX, y: midY }
-    // `-π/2` 让第一个落在正上方，然后顺时针均分。
-    const angle = (index / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2
-    return { x: midX + Math.cos(angle) * 92, y: midY + Math.sin(angle) * 84 }
+  // 以中心那一端为轴分三类：他指向别人的、别人指向他的、以及不经过他的。前两类同一种读法，
+  // 第三类单独列——**不能因为它没连到中心就不画**，那也是关系。
+  const arms: { who: string, label: string }[] = []
+  const between: RoomCaseRelation[] = []
+  for (const one of relations) {
+    if (one.from === center) arms.push({ who: one.to, label: one.label })
+    else if (one.to === center) arms.push({ who: one.from, label: one.label })
+    else between.push(one)
   }
-  const known = new Set([center, ...others])
+  // 本子里写了关系、而那个人不在这一桌（比如死者本人）——那种也画一条，不去补空节点。
+  // 反过来，本子里**没给某个人写关系**时也得把他列出来：漏一个人比少一条关系更让人摸不着头。
+  const listed = new Set(arms.map(one => one.who))
+  const missing = names.filter(one => one !== center && !listed.has(one))
 
-  return <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto' }}>
-    {relations.map((one, index) => {
-      // 线两头都得在图上——本子里写了别人不在场，那条线画不出来。
-      if (!known.has(one.from) || !known.has(one.to)) return null
-      const from = at(one.from)
-      const to = at(one.to)
-      return <g key={`e${index}`}>
-        <line
-          x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-          stroke="var(--dsw-border-subtle, rgba(127,127,127,0.5))"
-          strokeWidth={1.2}
-        />
-        {one.label === '' ? null : <text
-          x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 - 3}
-          textAnchor="middle" style={{ fontSize: '9px', fill: 'currentColor', opacity: 0.7 }}
-        >{one.label}</text>}
-      </g>
-    })}
-    {[center, ...others].map((name) => {
-      const { x, y } = at(name)
-      return <g key={name}>
-        <rect
-          x={x - 31} y={y - 15} width={62} height={30} rx={8}
-          fill="var(--dsw-surface-sunken, rgba(127,127,127,0.10))"
-          stroke="var(--dsw-border-subtle, rgba(127,127,127,0.28))"
-        />
-        <text x={x} y={y + 4} textAnchor="middle" style={{ fontSize: '10.5px', fill: 'currentColor' }}>
-          {name}
-        </text>
-      </g>
-    })}
-  </svg>
+  const row = (who: string, label: string, key: string) =>
+    <div key={key} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', minHeight: '22px' }}>
+      {/* 一条竖线 + 一个小横杠连到名字上——比画 SVG 省地方，而「挂在中心下面」这层意思还在。 */}
+      <span aria-hidden style={{
+        width: '12px', flexShrink: 0, alignSelf: 'stretch', position: 'relative',
+        borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.38))',
+      }}>
+        <span style={{
+          position: 'absolute', left: 0, top: '11px', width: '9px', height: '1px',
+          background: 'var(--dsw-border-subtle, rgba(127,127,127,0.38))',
+        }} />
+      </span>
+      <span style={{ fontSize: '11.5px', fontWeight: 500, flexShrink: 0, minWidth: '44px' }}>{who}</span>
+      {label === ''
+        ? <span style={{ fontSize: '10.5px', opacity: 0.45, fontStyle: 'italic' }}>{t('left.relationMissing')}</span>
+        : <span style={{ fontSize: '10.5px', opacity: 0.68, lineHeight: 1.35 }}>{label}</span>}
+    </div>
+
+  return <div>
+    <div style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '3px 10px', borderRadius: '8px', marginBottom: '2px',
+      background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.14))',
+      fontSize: '11.5px', fontWeight: 600,
+    }}>{center}</div>
+    {relations.length === 0 && names.length <= 1
+      ? <div style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>{t('left.noRelations')}</div>
+      : <div style={{ marginTop: '1px' }}>
+        {arms.map((one, index) => row(one.who, one.label, `a${index}`))}
+        {missing.map((one, index) => row(one, '', `m${index}`))}
+      </div>}
+    {between.length > 0 && <div style={{ marginTop: '6px' }}>
+      <div style={{ fontSize: '10px', opacity: 0.5, marginBottom: '2px' }}>{t('left.between')}</div>
+      {between.map((one, index) => row(`${one.from} · ${one.to}`, one.label, `b${index}`))}
+    </div>}
+  </div>
 }
 
 /**
@@ -211,7 +228,7 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
           ...(caseEntry?.roles ?? []).map(role => role.name),
           ...relations.flatMap(one => [one.from, one.to]),
         ])]
-        return <RelationGraph relations={relations} center={victimName} names={names} />
+        return <RelationGraph relations={relations} center={victimName} names={names} t={t} />
       })()}
     </section>
 

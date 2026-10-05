@@ -23,6 +23,9 @@ export const zh = {
 
   // 左栏
   'left.table': '这一桌',
+  'left.relationMissing': '（本子里没写）',
+  'left.noRelations': '这本子没写人物关系。',
+  'left.between': '彼此之间',
   'left.relations': '人物关系',
   'left.timeline': '时间线 · 你们说过的',
   'left.you': '你',
@@ -113,6 +116,9 @@ export const en = {
   'phase.reveal': 'Reveal',
 
   'left.table': 'At the table',
+  'left.relationMissing': '(not written in this case)',
+  'left.noRelations': 'This case does not describe any relations.',
+  'left.between': 'Between them',
   'left.relations': 'Relations',
   'left.timeline': 'Timeline · what they said',
   'left.you': 'you',

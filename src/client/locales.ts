@@ -30,6 +30,7 @@ export const zh = {
   'left.relations': '人物关系',
   'left.timeline': '时间线 · 你们说过的',
   'left.you': '你',
+  'left.dead': '死者',
   'left.notSeated': '还没上桌',
   'left.nothingSaid': '其余时段还没有人交代',
 
@@ -125,6 +126,7 @@ export const en = {
   'left.relations': 'Relations',
   'left.timeline': 'Timeline · what they said',
   'left.you': 'you',
+  'left.dead': 'the deceased',
   'left.notSeated': 'not seated',
   'left.nothingSaid': 'the rest of the night is still unaccounted for',
 

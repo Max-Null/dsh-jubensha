@@ -96,6 +96,14 @@ export function Face({ id, avatar, size = 30 }: { id: string; avatar?: string; s
  * @param props - 关系、中心的那个人（死者）与图上要出现的人。
  * @returns 一张 SVG。
  */
+/** 大图上一个人：名字、一句身份、是不是你、是不是死者。 */
+interface Person {
+  readonly name: string
+  readonly blurb: string
+  readonly mine: boolean
+  readonly dead: boolean
+}
+
 /**
  * 放大后的关系图：**连线图**。这一层才有画它的地方。
  *
@@ -106,9 +114,10 @@ export function Face({ id, avatar, size = 30 }: { id: string; avatar?: string; s
  * @param props - 关系、中心那个人、以及关闭回调。
  * @returns 遮罩 + 弹窗。
  */
-function RelationDialog({ relations, center, onClose, t }: Locale & {
+function RelationDialog({ relations, center, people, onClose, t }: Locale & {
   relations: readonly RoomCaseRelation[]
   center: string
+  people: readonly Person[]
   onClose: () => void
 }) {
   // Esc 也关。监听挂在 document 上，因为焦点不一定在弹窗里。
@@ -216,24 +225,45 @@ function RelationDialog({ relations, center, onClose, t }: Locale & {
             }}
           >{one.label}</text>
         })}
+        {/* 节点用 `foreignObject` 装 HTML，而不是 `<text>`——因为身份是一句会换行的话，而 SVG 的
+            `text` 不自动折行。这里要的是「名字一行、身份一行」，正好是 HTML 的本行。 */}
         {[center, ...ends].map(name => {
           const { x, y } = at(name)
           const isCenter = name === center
-          const boxW = isCenter ? 108 : 96
-          const boxH = isCenter ? 40 : 34
-          return <g key={name}>
-            <rect
-              x={x - boxW / 2} y={y - boxH / 2} width={boxW} height={boxH} rx={10}
-              fill={isCenter
+          const person = people.find(one => one.name === name)
+          const boxW = isCenter ? 156 : 172
+          const boxH = isCenter ? 46 : 50
+          return <foreignObject
+            key={name}
+            x={x - boxW / 2} y={y - boxH / 2} width={boxW} height={boxH}
+          >
+            <div style={{
+              width: '100%', height: '100%', boxSizing: 'border-box',
+              display: 'flex', flexDirection: 'column', justifyContent: 'center',
+              padding: '5px 10px', borderRadius: '10px',
+              background: isCenter
                 ? 'var(--dsw-surface-sunken, rgba(127,127,127,0.16))'
-                : 'var(--dsw-surface-sunken, rgba(127,127,127,0.09))'}
-              stroke="var(--dsw-border-subtle, rgba(127,127,127,0.3))"
-            />
-            <text x={x} y={y + 5} textAnchor="middle" style={{
-              fontSize: isCenter ? '13px' : '12px', fill: 'currentColor',
-              fontWeight: isCenter ? 600 : 500,
-            }}>{name}</text>
-          </g>
+                : 'var(--dsw-surface-sunken, rgba(127,127,127,0.09))',
+              border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.3))',
+              textAlign: 'center', overflow: 'hidden',
+            }}>
+              <div style={{ fontSize: isCenter ? '12.5px' : '12px', fontWeight: 600, lineHeight: 1.3 }}>
+                {name}
+                {person?.mine === true
+                  ? <span style={{ marginLeft: '5px', fontSize: '10px', fontWeight: 400, color: 'var(--dsw-accent, #4a7fd4)' }}>{t('left.you')}</span>
+                  : null}
+                {person?.dead === true
+                  ? <span style={{ marginLeft: '5px', fontSize: '10px', fontWeight: 400, opacity: 0.55 }}>{t('left.dead')}</span>
+                  : null}
+              </div>
+              {person === undefined || person.blurb === '' ? null : <div style={{
+                fontSize: '9.5px', opacity: 0.62, lineHeight: 1.28, marginTop: '2px',
+                // 身份长就让它折行；折不下就截——大图的价值在「一眼看清谁是谁」，不是把每句读完。
+                overflow: 'hidden', display: '-webkit-box',
+                WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+              }}>{person.blurb}</div>}
+            </div>
+          </foreignObject>
         })}
       </svg>
     </div>
@@ -253,13 +283,13 @@ function RelationDialog({ relations, center, onClose, t }: Locale & {
  * @param props - 关系列表、中心那个人、以及本子里所有角色名。
  * @returns 关系表（可点开）。
  */
-function RelationGraph({ relations, center, names, t }: Locale & {
+function RelationGraph({ relations, center, names, people, t }: Locale & {
   relations: readonly RoomCaseRelation[]
   center: string
   names: readonly string[]
+  people: readonly Person[]
 }) {
-  const [expanded, setExpanded] = useState(false)
-  // 以中心那一端为轴分三类：他指向别人的、别人指向他的、以及不经过他的。前两类同一种读法，
+  const [expanded, setExpanded] = useState(false)  // 以中心那一端为轴分三类：他指向别人的、别人指向他的、以及不经过他的。前两类同一种读法，
   // 第三类单独列——**不能因为它没连到中心就不画**，那也是关系。
   const arms: { who: string, label: string }[] = []
   const between: RoomCaseRelation[] = []
@@ -331,7 +361,7 @@ function RelationGraph({ relations, center, names, t }: Locale & {
     >{body}</button>
     <div style={{ fontSize: '10px', opacity: 0.45, marginTop: '4px' }}>{t('left.expandHint')}</div>
     {expanded && <RelationDialog
-      relations={relations} center={center} t={t}
+      relations={relations} center={center} people={people} t={t}
       onClose={() => setExpanded(false)}
     />}
   </div>
@@ -397,7 +427,28 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
           ...(caseEntry?.roles ?? []).map(role => role.name),
           ...relations.flatMap(one => [one.from, one.to]),
         ])]
-        return <RelationGraph relations={relations} center={victimName} names={names} t={t} />
+        // 每个人带一句身份——那正是「这一桌」里那几行 `public`。小图上只有名字与关系，
+        // 谁是谁要回左栏去对；放进大图才看得全（用户提的）。
+        const people = [
+          ...seats.map((seat) => {
+            const role = roleOf(seat)
+            return {
+              name: role?.name ?? seat,
+              blurb: role?.public ?? '',
+              mine: seat === game?.humanSeat,
+              dead: false,
+            }
+          }),
+          // 死者的身份栏留空：名字旁边那个「死者」标记已经说完了这件事，再写一遍就是同一句
+          // 话出现在两行里（第一版就是这样，图上「周明远 死者 / 死者」）。
+          ...(victimName === '' ? [] : [{
+            name: victimName, blurb: '', mine: false, dead: true,
+          }]),
+        ]
+        return <RelationGraph
+          relations={relations} center={victimName} names={names}
+          people={people} t={t}
+        />
       })()}
     </section>
 

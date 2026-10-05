@@ -61,7 +61,17 @@ const HIDDEN_ENTRY_TEXT = '来一局剧本杀'
 
 type Locale = PropsLocale<'jubensha'>
 
-/** 视图注入面——两件事：谁在看我，以及怎么读到桌上说了什么。 */
+/** 桌上一位玩家的当前状态。宿主算好放进房间快照里（见 `../index.ts` 的 `table`）。 */
+export interface TableRow {
+  /** 座位 id。 */
+  readonly seat: string
+  /** 这一刻他在不在生成（正在想）。 */
+  readonly running: boolean
+  /** 还在上桌 / 已经在桌上 / 上桌失败。 */
+  readonly phase: 'provisioning' | 'active' | 'failed'
+}
+
+/** 视图注入面——谁在看我，以及怎么读到桌上说了什么。 */
 export interface RoomInjected {
   /** 这个标签属于哪个会话。快照按它取，因为局面是每个会话各自一局。 */
   sessionId: string

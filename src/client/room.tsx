@@ -600,9 +600,14 @@ function MidColumn({
       : null}
 
     {phase === 'reveal'
-      ? (game?.truth == null
-        ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('reveal.waiting')}</div></Card>
-        : <>
+      ? (game?.truth === undefined
+        // **字段整个不在**，不是「还没到复盘」——那是客户端换了而宿主没重启。宿主半边没有
+        // 热更新，所以这个组合真的会出现（2026-10-06 用户就撞上了，而两种情形显示成同一句话，
+        // 我只能隔着屏幕猜）。说清楚它是什么，比一句含糊的「还没开始」有用。
+        ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('reveal.staleHost')}</div></Card>
+        : game?.truth === null
+          ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('reveal.waiting')}</div></Card>
+          : <>
           <Card>
             <div style={{ fontSize: '11.5px', opacity: 0.6, marginBottom: '4px' }}>{t('reveal.narrative')}</div>
             <div style={{ fontSize: '12.5px', lineHeight: 1.85, whiteSpace: 'pre-wrap' }}>{game.truth.narrative}</div>

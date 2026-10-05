@@ -26,24 +26,31 @@ import { openingInstruction } from '../instruction.ts'
 import type { SaidLine } from './said.ts'
 
 /**
- * 哪些来源不属于「桌上说的话」。
+ * 哪些来源**不是**「桌上说的话」。
  *
- * 右栏要的是人在桌上说的，而同一个通道里还流着上下文注入、技能目录、别的插件的通知——它们
- * 都是 `source.kind` 上带着来源标签的。这一串是**实测见到的注入类**（见界面设计 §5.3）。
+ * 右栏要的是人在桌上说的，而同一个通道里还流着上下文注入、技能目录、别的插件的通知、以及
+ * 子 agent 的结算回执。这一串是**实测见到的非人话**——2026-10-06 从一次带两名玩家的真局里
+ * 读出来的 `source.kind` 分布：真人是 `user`（21 条），玩家是 `agent-message`（11 条，直接在
+ * 座）与 `team-message`（29 条，经 Team 的 send_message 发来），其余都不算。
  *
- * 用**排除法**而不是白名单：AI 玩家那条路的 `source.kind` 还没实测到（见 §5.3 末尾），排除了
- * 已知的注入，剩下的就都算"人说的"——宁可多显示一句，也别让玩家的发言被静默吃掉。
+ * 用**排除法**而不是白名单：将来多出一种来源，多显示一句也比把玩家的话静默吃掉好。（这一条
+ * 已经兑现过一次——`agent-message` 与 `team-message` 在实测之前是不知道的。）
  */
-const INJECTED_KINDS = new Set([
+const NOT_SPOKEN = new Set([
+  // 上下文注入（内核塞的）
   'runtime-context',
   'agent-instructions',
   'skill-catalog',
   'time-context',
+  // 子 agent 的结算回执——那是「他干完了」，不是「他说了什么」
+  'subagent-settled',
+  // 工具重复调用的提醒
+  'repeat-tool-reminder',
 ])
 
 /** 这条是不是「桌上说的话」。 */
 function isSaid(line: SaidLine): boolean {
-  return !INJECTED_KINDS.has(line.from) && !line.from.startsWith('plugin:')
+  return !NOT_SPOKEN.has(line.from) && !line.from.startsWith('plugin:')
 }
 
 type Locale = PropsLocale<'jubensha'>
@@ -387,7 +394,13 @@ function RightColumn({ t, said }: Locale & { said: readonly SaidLine[] }) {
           borderBottom: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.16))',
         }}>
           <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '2px' }}>
-            {line.from === 'user' ? t('right.you') : line.from}
+            {line.from === 'user'
+              ? t('right.you')
+              // 玩家有两条路进来：直接在座说的，与经 Team 的 send_message 发来的。对读的人来说
+              // 都是「玩家」，而 `kind` 这个内部名字不该出现在界面上。
+              : line.from === 'agent-message' || line.from === 'team-message'
+                ? t('right.player')
+                : line.from}
           </div>
           <div style={{ fontSize: '12.5px', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {line.text}

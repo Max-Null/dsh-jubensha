@@ -49,6 +49,20 @@ declare module '@deepseek-ai/dsh-client-ui-chat/client' {
 }
 
 /**
+ * 剥掉 Team 消息自带的信封。
+ *
+ * 玩家经 Team 的 `send_message` 发来的话，正文前面带着一段
+ * `Team message <消息 id> from <成员名>: `——那是信道的记账，不是他说的话，而右栏要的是后者。
+ * 实测（2026-10-06，一次带两名玩家的真局）就是这个形状。
+ * @param text - 原始正文。
+ * @returns 剥掉信封的正文；没有信封时原样返回。
+ */
+function unwrapTeamMessage(text: string): string {
+  const match = /^Team message \S+ from \S+:\s*/u.exec(text)
+  return match === null ? text : text.slice(match[0].length).trim()
+}
+
+/**
  * 把一条消息的 `content` 拍成一段文字。
  *
  * 它是富结构（`[{ type: 'text', text }]` 起头，还可能有别的东西），而房间页只要一句话。
@@ -57,7 +71,7 @@ declare module '@deepseek-ai/dsh-client-ui-chat/client' {
  * @returns 拼起来的文字；没有文字内容时给空串。
  */
 function textOf(content: unknown): string {
-  if (typeof content === 'string') return content.trim()
+  if (typeof content === 'string') return unwrapTeamMessage(content.trim())
   if (!Array.isArray(content)) return ''
   const parts: string[] = []
   for (const item of content) {
@@ -69,7 +83,7 @@ function textOf(content: unknown): string {
     const one = item as { type?: unknown, text?: unknown }
     if (one.type === 'text' && typeof one.text === 'string') parts.push(one.text)
   }
-  return parts.join('\n').trim()
+  return unwrapTeamMessage(parts.join('\n').trim())
 }
 
 /**

@@ -26,6 +26,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 // 子路径看包的形态：`ui-conversation` / `ui-renderer` 是**宿主+客户端**两半的包，声明在 `/client`；
 // 而 `ui-slots` 自己就是浏览器半边的包，主入口即是。
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
@@ -33,6 +34,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { RoomSnapshot } from '../room-types.ts'
 import { RoomView } from './room.tsx'
 import { NoteLayer } from './notes.tsx'
+import { saidDefinition } from './said.ts'
 import { SettingsTab } from './settings.tsx'
 import { en, zh } from './locales.ts'
 
@@ -43,8 +45,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-/** 需要的服务：`locale` 注册文案，`slots` 挂标签。 */
-export const inject = ['locale', 'slots']
+/** 需要的服务：`locale` 注册文案，`slots` 挂标签，`uiConversation` 注册会话事件的投影。 */
+export const inject = ['locale', 'slots', 'uiConversation']
 
 type Locale = PropsLocale<'jubensha'>
 
@@ -128,6 +130,9 @@ export function TeamView({ t, sessionId }: PropsRuntime<'conversation.view'> & L
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register('jubensha', { zh, en }), 'jubensha: dictionaries')
+  // 「谁说了什么」的投影。注册它之后，会话里那些 `agent/inbox/spliced` 会被折成房间页能读的
+  // 东西——而**对话流里不会多出一行**（`visibility: 'hidden'`）。
+  ctx.effect(() => ctx.uiConversation.events.register(saidDefinition), 'jubensha: said definition')
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'jubensha.team',

@@ -188,6 +188,63 @@ export interface SceneVictim {
   readonly timeWindow: readonly string[]
 }
 
+/** 时间线上的一步。 */
+export interface SceneTruthStep {
+  /** 什么时候。 */
+  readonly at: string
+  /** 谁。 */
+  readonly who: string
+  /** 他实际做了什么——注意是**实际**，不是他嘴上说的。 */
+  readonly doing: string
+}
+
+/** 复盘那一夜：真相、逐段时间线、以及那些「其实不是」。 */
+export interface SceneTruth {
+  /** 完整真相。 */
+  readonly narrative: string
+  /** 真值时间线。 */
+  readonly timeline: readonly SceneTruthStep[]
+  /** 设计好的误伤——复盘时要一条条解开，否则玩家会带着「我是不是冤枉了谁」散场。 */
+  readonly misdirections: readonly string[]
+  /** 事发之后又发生了什么。 */
+  readonly after: readonly string[]
+}
+
+/**
+ * 从本子里取真相那一段——**给复盘页用**。
+ *
+ * 它只在复盘之后才该被读，而那道判断在宿主那边（`index.ts` 按 `finished` 判，复盘前给 `null`）。
+ * 本子的封存机制管的是 `jubensha_case` 取段，房间页走的是端点，是另一条读法——所以那一道判断
+ * 得在那条路上显式写一次。
+ *
+ * 宽容地取：缺哪一段就给空，整段 `truth` 都没写时给 `null`——一个没写 `after` 的本子不该让
+ * 复盘页整块不显示。
+ * @param loaded - 加载好的本子。
+ * @returns 真相；本子没写时为 `null`。
+ */
+export function sceneTruth(loaded: LoadedCase): SceneTruth | null {
+  const truth = record(loaded.sections['truth'])
+  const narrative = text(truth['narrative'])
+  const steps = Array.isArray(truth['timeline']) ? truth['timeline'] : []
+  const timeline = steps.flatMap((one): SceneTruthStep[] => {
+    const step = record(one)
+    const doing = text(step['doing'])
+    if (doing === '') return []
+    return [{ at: text(step['at']), who: text(step['who']), doing }]
+  })
+  /** 取一段字符串列表，把空行丢掉。 */
+  const linesOf = (name: string): string[] =>
+    (Array.isArray(truth[name]) ? truth[name] : []).flatMap((one): string[] => {
+      const line = text(one)
+      return line === '' ? [] : [line]
+    })
+  const misdirections = linesOf('misdirections')
+  const after = linesOf('after')
+  if (narrative === '' && timeline.length === 0) return null
+  return { narrative, timeline, misdirections, after }
+}
+
+
 /**
  * 从本子里取死者。
  *

@@ -501,8 +501,8 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
  * @returns 主区。
  */
 function MidColumn({
-  snapshot, phase, t,
-}: Locale & { snapshot: RoomSnapshot; phase: Phase }) {
+  snapshot, phase, said, t,
+}: Locale & { snapshot: RoomSnapshot, phase: Phase, said: readonly SaidLine[] }) {
   const game = snapshot.game
   const caseEntry = snapshot.cases.find(one => one.id === game?.caseId)
   const human = caseEntry?.roles.find(role => role.player === 'human')
@@ -566,8 +566,71 @@ function MidColumn({
       </Card>)
       : null}
 
-    {phase === 'final' || phase === 'reveal'
-      ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('mid.pending')}</div></Card>
+    {phase === 'final'
+      ? (() => {
+        // **这一轮谁说过话。** 右栏那套投影已经在读了（`said` 是同一个来源，从 `RoomView`
+        // 传下来），而这一页要的是按座位归集的版本：每人最近那一段，以及「还没出声」的人。
+        // 投票阶段最要紧的信息就是这个——不然玩家不知道该等谁、也不知道自己漏听了谁。
+        const latest = new Map<string, string>()
+        for (const line of said.filter(isSaid)) {
+          const seat = line.who === undefined ? null : line.who.split('-')[0] ?? null
+          if (seat !== null) latest.set(seat, line.text)
+        }
+        return (game?.seats ?? []).map(seat => {
+          const role = caseEntry?.roles.find(one => one.id === seat)
+          const spoken = latest.get(seat)
+          return <Card key={seat}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', marginBottom: spoken === undefined ? 0 : '4px' }}>
+              <b>{role?.name ?? seat}</b>
+              {spoken === undefined
+                ? <span style={{ fontSize: '11.5px', opacity: 0.55 }}>{t('final.notSpoken')}</span>
+                : null}
+            </div>
+            {spoken === undefined
+              ? null
+              : <div style={{
+                fontSize: '12px', opacity: 0.8, lineHeight: 1.6,
+                // 只给最近那一段，而且限高——这一页是「他要你说什么」，不是把对话再倒一遍。
+                display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}>{spoken}</div>}
+          </Card>
+        })
+      })()
+      : null}
+
+    {phase === 'reveal'
+      ? (game?.truth == null
+        ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('reveal.waiting')}</div></Card>
+        : <>
+          <Card>
+            <div style={{ fontSize: '11.5px', opacity: 0.6, marginBottom: '4px' }}>{t('reveal.narrative')}</div>
+            <div style={{ fontSize: '12.5px', lineHeight: 1.85, whiteSpace: 'pre-wrap' }}>{game.truth.narrative}</div>
+          </Card>
+          {game.truth.timeline.length === 0 ? null : <Card>
+            <div style={{ fontSize: '11.5px', opacity: 0.6, marginBottom: '5px' }}>{t('reveal.timeline')}</div>
+            {game.truth.timeline.map((step, index) => <div key={`${step.at}-${index}`} style={{
+              display: 'flex', gap: '8px', padding: '3px 0', alignItems: 'baseline',
+              borderTop: index === 0 ? 'none' : '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.14))',
+            }}>
+              <span style={{ fontSize: '11px', opacity: 0.6, flexShrink: 0, minWidth: '52px' }}>{step.at}</span>
+              <span style={{ fontSize: '11.5px', flexShrink: 0, minWidth: '34px', fontWeight: 500 }}>{step.who}</span>
+              <span style={{ fontSize: '12px', opacity: 0.85, lineHeight: 1.6 }}>{step.doing}</span>
+            </div>)}
+          </Card>}
+          {game.truth.misdirections.length === 0 ? null : <Card>
+            <div style={{ fontSize: '11.5px', opacity: 0.6, marginBottom: '4px' }}>{t('reveal.notIt')}</div>
+            {game.truth.misdirections.map((one, index) => <div key={index} style={{
+              fontSize: '12px', opacity: 0.85, lineHeight: 1.6, marginTop: index === 0 ? 0 : '5px',
+            }}>· {one}</div>)}
+          </Card>}
+          {game.truth.after.length === 0 ? null : <Card>
+            <div style={{ fontSize: '11.5px', opacity: 0.6, marginBottom: '4px' }}>{t('reveal.after')}</div>
+            {game.truth.after.map((one, index) => <div key={index} style={{
+              fontSize: '12px', opacity: 0.85, lineHeight: 1.6, marginTop: index === 0 ? 0 : '3px',
+            }}>· {one}</div>)}
+          </Card>}
+        </>)
       : null}
   </div>
 }
@@ -903,7 +966,7 @@ export function RoomView({
       <div style={{ minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
         {snapshot.game === null
           ? <OpenGame snapshot={snapshot} t={t} />
-          : <MidColumn snapshot={snapshot} phase={shown} t={t} />}
+          : <MidColumn snapshot={snapshot} phase={shown} said={said} t={t} />}
       </div>
       <div style={{
         minWidth: 0, minHeight: 0, overflowY: 'auto',

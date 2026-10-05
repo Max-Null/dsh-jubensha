@@ -64,6 +64,8 @@ export interface RoomGame {
   readonly clues: readonly RoomClue[]
   /** 真人那位拿到的角色本正文——**回看用**，与开局时发给他的那份是同一份。 */
   readonly script: string
+  /** 复盘那一夜；复盘之前是 `null`。 */
+  readonly truth: RoomTruth | null
 }
 
 /** 桌上的一位 AI 玩家。 */
@@ -72,6 +74,21 @@ export interface RoomPlayer {
   readonly seat: string
   /** 角色名。 */
   readonly name: string
+}
+
+/**
+ * 复盘那一夜。**复盘之前是 `null`**——宿主那边按 `finished` 判（见 `index.ts`），
+ * 而那正对应本子的封存机制：带答案的段要封到复盘。
+ */
+export interface RoomTruth {
+  /** 完整真相。 */
+  readonly narrative: string
+  /** 真值时间线。 */
+  readonly timeline: readonly { at: string, who: string, doing: string }[]
+  /** 设计好的误伤——复盘时要一条条解开。 */
+  readonly misdirections: readonly string[]
+  /** 事发之后又发生了什么。 */
+  readonly after: readonly string[]
 }
 
 /**

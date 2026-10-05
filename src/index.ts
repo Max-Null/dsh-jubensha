@@ -25,7 +25,7 @@ import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { openActorPool } from './actor.ts'
 import type { Actor, ActorPool } from './actor.ts'
-import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, sceneVictim, tableClues } from './case.ts'
+import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, sceneTruth, sceneVictim, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
 import { casesRoot, listCases } from './cases.ts'
@@ -603,6 +603,9 @@ export function apply(ctx: Context): void {
           dealt: dealt.has(clue.id),
         })),
         script: scriptRole === undefined ? '' : roleBook(scriptRole),
+        // **复盘之后才给。** 本子的封存机制管的是 `jubensha_case` 取段，而房间页走端点——
+        // 那是另一条路，所以这一道判断要在这儿显式写一次（`finished` 就是「复盘了没有」）。
+        truth: isFinished(game) && loaded !== undefined ? sceneTruth(loaded) : null,
       },
       players: players.list().map(player => ({ seat: player.seat, name: player.name })),
       // 桌上那几位此刻在干什么。**它每次轮询都重新算**——那正是它存在的理由：`players` 是

@@ -28,7 +28,7 @@ export const zh = {
   'room.pickActor': '（挑一个演员）',
   'room.human': '你',
   'room.empty': '还没开局。在对话里让主持人开一局，这里就会显示局面。',
-  'room.hint': '面板是只读的——开一局、推进阶段、发线索都在对话里说。',
+  'room.hint': '这里是只读的，会跟着对话走——开一局、推进阶段、发线索都在对话里说。',
 }
 
 /** English copy. */
@@ -49,5 +49,5 @@ export const en = {
   'room.pickActor': '(pick an actor)',
   'room.human': 'you',
   'room.empty': 'No game yet. Ask the host in the conversation to start one, and the table shows up here.',
-  'room.hint': 'This panel is read-only — starting a game, advancing phases and dealing clues all happen in the conversation.',
+  'room.hint': 'Read-only, and it follows the conversation — starting a game, advancing phases and dealing clues all happen in the chat.',
 }

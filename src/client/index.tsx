@@ -104,7 +104,7 @@ export function RoomBody({ t }: Locale) {
 
   useEffect(() => {
     let cancelled = false
-    void (async () => {
+    const load = async (): Promise<void> => {
       try {
         const response = await fetch('/jubensha/room')
         const body = await response.json() as { ok?: boolean, value?: RoomSnapshot, error?: string }
@@ -118,8 +118,17 @@ export function RoomBody({ t }: Locale) {
       } catch (cause: unknown) {
         if (!cancelled) setProblem(cause instanceof Error ? cause.message : String(cause))
       }
-    })()
-    return () => { cancelled = true }
+    }
+    void load()
+    // **低频轮询**。一开始没做它，理由是「用户看着面板的时候正是他不太可能在推进阶段的时刻」——
+    // 那张截图把这个理由推翻了：用户就是一边打一边看，而标签是常驻的、切走也不卸载，
+    // 于是它只在挂载时拉过一次，之后再没动过，看起来像"房间和会话没有联动"。
+    //
+    // 代价很小（一次几百字节的只读请求），而页面藏起来时不拉——那是最没意义的一档。
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load()
+    }, 4000)
+    return () => { cancelled = true; window.clearInterval(timer) }
   }, [])
 
   const game = snapshot?.game ?? null

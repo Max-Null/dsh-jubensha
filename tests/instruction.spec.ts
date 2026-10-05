@@ -49,6 +49,17 @@ describe('开局指令', () => {
     expect(text).toContain('humanSeat="p0"')
   })
 
+  it('要说清这一局用团队模式——不然第 ③ 步会报「没有 agent-team 服务」', () => {
+    // AI 玩家上桌靠 team 的 spawn_teammate，而 DSH 默认不开团队。少了这句话，前两步照常成功、
+    // 第三步才失败，而那句报错看着像插件坏了（用户 2026-10-06 提醒）。
+    const withPlayers = openingInstruction(ENTRY, CAST)
+    expect(withPlayers).toContain('团队模式')
+    // 不排座时没有第 ③ 步，而那句话仍在开头——因为「要不要开团队」是整条消息的语气，
+    // 不该等到第三步才说。
+    const noPlayers = openingInstruction(ENTRY, [])
+    expect(noPlayers).toContain('团队模式')
+  })
+
   it('每个 AI 位子都指名到演员——不指名的话跨局记忆白做', () => {
     const text = openingInstruction(ENTRY, CAST)
     for (const one of CAST) {

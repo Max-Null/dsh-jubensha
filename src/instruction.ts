@@ -38,7 +38,11 @@ export function openingInstruction(entry: RoomCase, assignment: readonly SeatAss
   const seats = entry.roles.map(role => role.id)
   const human = entry.roles.filter(role => role.player === 'human').map(role => role.id)
   const lines = [
-    `开一局《${entry.title}》（case ${entry.id}）。`,
+    `开一局《${entry.title}》（case ${entry.id}）——**这一局要用团队模式**。`,
+    '',
+    '（第 ③ 步要让几位 AI 玩家上桌，而那是靠 team 的 spawn_teammate 创建的；DSH 默认不开团队，',
+    '  所以要在这条消息里说清。少了这句，前两步会照常成功，第三步却报「这个部署里没有',
+    '  agent-team 服务」——那看着像插件坏了，其实只差这一句。）',
     '',
     '① 取本子（先 load，它会顺带报出格式问题）：',
     `   jubensha_case —— action="load", dir="${entry.path}"`,
@@ -50,8 +54,9 @@ export function openingInstruction(entry: RoomCase, assignment: readonly SeatAss
   if (assignment.length > 0) {
     lines.push(
       '',
-      '③ 让这几位上桌。**一座一份**：用 jubensha_case action="book" 取到的是那个座位的引用，'
-        + '原样填进 roleBook，别转述、别换座位；actor 是他跨局的身份：',
+      '③ 让这几位上桌（这一步是唯一需要团队模式的）。**一座一份**：用 jubensha_case '
+        + 'action="book" 取到的是那个座位的引用，原样填进 roleBook，别转述、别换座位；'
+        + 'actor 是他跨局的身份：',
     )
     for (const one of assignment) {
       lines.push(`   ${one.seat} ${one.roleName} → actor="${one.actorId}"（${one.actorName}）`)

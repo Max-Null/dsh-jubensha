@@ -1,84 +1,61 @@
 /**
- * 房间 —— 剧本杀的那张桌子。
+ * 房间 —— 剧本杀的那张桌子，装在会话视图的一个标签里，标签叫「团队」。
  *
- * **主体装在会话视图的一个标签里，标签叫「团队」。** 这不是掩饰，它本来就在讲这件事：
- * 桌上坐着谁、谁演谁、这一局到哪一步了。一个叫「团队」的标签与「对话 / 轨迹 / 上下文」
- * 并列，看起来就是 Agent Teams 的名单。
- *
+ * **为什么叫「团队」**：它本来就在讲这件事——桌上坐着谁、谁演谁、这一局到哪一步了。
+ * 一个叫「团队」的标签与「对话 / 轨迹 / 上下文」并列，看起来就是 Agent Teams 的名单。
  * 而**这个伪装性是有用的**：对话形态唯一的面板给不了的东西，就是「看起来在干别的」——
- * 那正是这个插件存在的第一个理由（设计方案 §5 拍板记录第 4 条，用户原话「极其隐蔽，适合摸鱼」）。
- * 所以标签名不是随便起的，它得经得起旁边的人扫一眼。
+ * 那正是这个插件存在的第一个理由（用户原话「极其隐蔽，适合摸鱼」）。所以标签名不是随便起
+ * 的，它得经得起旁边的人扫一眼。
  *
- * 三处挂载共用同一个 `RoomBody`：
+ * **只有这一处挂载。** 曾经还有侧栏底部一个入口按钮与一个 `shell.overlay` 浮层，去掉的理由是
+ * 它们要一份 store 来共享开合状态、而标签不需要那件事：一个常驻的标签本身就是"一直开着"，
+ * 再给同一份内容配一条开合的路，只是让同一块东西有两个入口、两套状态、两处要维护。
  *
- * | 挂在哪 | 是什么 | 什么时候用 |
- * |---|---|---|
- * | `conversation.view` | 标签「团队」 | 主视图，常驻 |
- * | `shell.overlay` | 浮层 | 看着对话时瞄一眼 |
- * | `sidebar.footer.action` | 入口按钮 | 开那个浮层 |
- *
- * 后两处的 store 只装「浮层开着没有」这一件事；标签是常驻的，不需要开合状态。
+ * **它属于某个会话，不是属于这个进程。** `conversation.view` 的 inject 会告诉我们是谁在看我，
+ * 而快照按那个 id 取——局面是**每个会话各自一局**（见 `../index.ts` 里 `games` 的注释）。
  *
  * **它是附加层，不是第二条数据通道。** 宿主半边一行都没为它改：内容全部来自那个只读端点
- * `/jubensha/room`（见 `../room.ts`），而"排座"只生成一段文本交给主持人，不自己调工具。
+ * `/jubensha/room`（见 `../room.ts`），而「排座」只生成一段文本交给主持人，不自己调工具。
  *
  * @module @max-null/dsh-jubensha/client
  */
 import { useEffect, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
-import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { PropsStore } from '@deepseek-ai/dsh-client-store'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { avatarSvg } from '../avatar.ts'
 // 形状从 `room-types.ts` 取，不是从 `room.ts` 取：后者 import 了 cordis，而本文件要过
 // 打包的纯度门（它拒掉 `@deepseek-ai/*` 的任何导入，类型导入也不例外）。
 import type { RoomSnapshot } from '../room-types.ts'
 import { openingInstruction } from '../instruction.ts'
-import { createRoomStore } from './store.ts'
 import { en, zh } from './locales.ts'
 
-// 这几个 type-only import 拉入声明：槽位（`conversation.view` / `shell.overlay` /
-// `sidebar.footer.action` 都是别人声明的槽，注册进一个没人声明的槽会在装载时失败，
-// 类型上表现为槽名不满足 `never` 约束）与服务（`ctx.slots` / `ctx.locale`）。
+// 这几个 type-only import 拉入声明：`conversation.view` 是别人声明的槽（注册进一个没人声明的槽
+// 会在装载时失败，类型上表现为槽名不满足 `never` 约束），而 `ctx.slots` / `ctx.locale` 要有人
+// 声明才存在。
 //
-// 子路径看包的形态：`ui-conversation` / `ui-layout` / `ui-renderer` / `ui-sidebar` 是
-// **宿主+客户端**两半的包，声明在 `/client`；而 `ui-slots` 自己就是浏览器半边的包，主入口即是。
+// 子路径看包的形态：`ui-conversation` / `ui-renderer` 是**宿主+客户端**两半的包，声明在 `/client`；
+// 而 `ui-slots` 自己就是浏览器半边的包，主入口即是。
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** 房间 / 团队标签的文案。 */
+    /** 团队标签的文案。 */
     jubensha: keyof typeof zh
   }
 }
 
-/** 需要的服务：`locale` 注册文案，`slots` 挂三处。 */
+/** 需要的服务：`locale` 注册文案，`slots` 挂标签。 */
 export const inject = ['locale', 'slots']
 
-type Store = PropsStore<ReturnType<typeof createRoomStore>>
 type Locale = PropsLocale<'jubensha'>
 
-/** 浮层的框。标签视图不用它——那个是常驻的满宽区域，不该再套一层卡片。 */
-const panelStyle = {
-  position: 'fixed' as const,
-  top: '72px',
-  right: '24px',
-  width: '310px',
-  maxHeight: '70vh',
-  overflowY: 'auto' as const,
-  padding: '14px 16px',
-  borderRadius: '12px',
-  border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
-  background: 'var(--dsw-surface-raised, rgba(28,30,36,0.96))',
-  color: 'var(--dsw-text-primary, inherit)',
-  boxShadow: '0 12px 32px rgba(0,0,0,0.28)',
-  fontSize: '13px',
-  lineHeight: 1.6,
-  zIndex: 30,
+/** 视图注入面——只有一件事：谁在看我。 */
+export interface RoomInjected {
+  /** 这个标签属于哪个会话。快照按它取，因为局面是每个会话各自一局。 */
+  sessionId: string
 }
 
 /** 一行小标题。 */
@@ -87,17 +64,18 @@ function Heading({ children }: { children: string }) {
 }
 
 /**
- * 房间的内容本身 —— 三处挂载共用。
+ * 房间的内容本身。
  *
- * **它自己拉数据**：两条路各拉一次，比让调用方拉好传进来简单，而这份快照很小、频率很低。
- * 换成 store 会让"面板与标签共用一份缓存"变成必须处理失效的同步问题，收益不抵。
- * @param props - 本地化文案。
+ * **它自己拉数据**，每 4 秒一次（页面藏起来时不拉）。一开始不做轮询，理由是「用户看着它的时候
+ * 正是他不太可能在推进阶段的时刻」——那个理由被推翻了：标签是**常驻**的，只在挂载时拉一次等于
+ * 之后再不动，看着就像"房间和会话没有联动"。**该问的不是"用户会看多久"，是"这个界面活多久"。**
+ * @param props - 本地化文案与这个标签属于哪个会话。
  * @returns 房间的内容。
  */
-export function RoomBody({ t }: Locale) {
+export function RoomBody({ t, sessionId }: Locale & { sessionId: string }) {
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
-  // 排座是**组件内部的状态**：只有这一处知道，也不跨挂载存活，所以不进 store。
+  // 排座是**组件内部的状态**：只有这一处知道，也不跨挂载存活。
   const [chosen, setChosen] = useState<string | null>(null)
   const [cast, setCast] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState(false)
@@ -106,7 +84,7 @@ export function RoomBody({ t }: Locale) {
     let cancelled = false
     const load = async (): Promise<void> => {
       try {
-        const response = await fetch('/jubensha/room')
+        const response = await fetch(`/jubensha/room?session=${encodeURIComponent(sessionId)}`)
         const body = await response.json() as { ok?: boolean, value?: RoomSnapshot, error?: string }
         if (cancelled) return
         if (body.ok === true && body.value !== undefined) {
@@ -120,16 +98,11 @@ export function RoomBody({ t }: Locale) {
       }
     }
     void load()
-    // **低频轮询**。一开始没做它，理由是「用户看着面板的时候正是他不太可能在推进阶段的时刻」——
-    // 那张截图把这个理由推翻了：用户就是一边打一边看，而标签是常驻的、切走也不卸载，
-    // 于是它只在挂载时拉过一次，之后再没动过，看起来像"房间和会话没有联动"。
-    //
-    // 代价很小（一次几百字节的只读请求），而页面藏起来时不拉——那是最没意义的一档。
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load()
     }, 4000)
     return () => { cancelled = true; window.clearInterval(timer) }
-  }, [])
+  }, [sessionId])
 
   const game = snapshot?.game ?? null
   const actors = snapshot?.actors ?? []
@@ -284,71 +257,25 @@ export function RoomBody({ t }: Locale) {
 }
 
 /**
- * 侧栏底部那个入口按钮——开浮层用。
- * @param props - store 的动作与本地化文案。
- * @returns 一个按钮。
- */
-export function RoomButton({ actions, t }: PropsRuntime<'sidebar.footer.action'> & Store & Locale) {
-  return <button
-    type="button"
-    title={t('room.openTitle')}
-    aria-label={t('room.openTitle')}
-    onClick={() => actions.toggle()}
-    style={{
-      display: 'inline-flex', alignItems: 'center', height: '28px', padding: '0 10px',
-      borderRadius: '8px', border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
-      background: 'transparent', color: 'inherit', font: 'inherit', fontSize: '12px', cursor: 'pointer',
-    }}
-  >{t('room.open')}</button>
-}
-
-/**
- * 浮层。关着的时候返回 `null`。
- * @param props - store 的读取座位、动作与本地化文案。
- * @returns 浮层，或者什么都不渲染。
- */
-export function RoomPanel({ useStore, actions, t }: PropsRuntime<'shell.overlay'> & Store & Locale) {
-  // 选择器只取用得到的那一个字段：`useStore` 的签名要一个选择器，而不是返回整份状态。
-  const open = useStore(state => state.open)
-  if (!open) return null
-  return <div style={panelStyle} role="dialog" aria-label={t('room.title')}>
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-      <strong>{t('room.title')}</strong>
-      <button
-        type="button"
-        aria-label={t('room.close')}
-        onClick={() => actions.close()}
-        style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', font: 'inherit' }}
-      >✕</button>
-    </div>
-    <RoomBody t={t} />
-  </div>
-}
-
-/**
  * 会话视图的那个标签。
  *
- * 标签文字由 `apply` 里的 `label` 给（「团队」），组件本身只要渲染内容——它没有框、没有关
- * 闭按钮，因为它跟「对话 / 轨迹 / 上下文」一样是常驻的一栏。
- * @param props - 本地化文案。
+ * 标签文字由 `apply` 里的 `label` 给（「团队」），组件本身只要渲染内容——它没有框、没有关闭
+ * 按钮，因为它跟「对话 / 轨迹 / 上下文」一样是常驻的一栏。
+ * @param props - 本地化文案与注入面（谁在看我）。
  * @returns 房间的内容。
  */
-export function TeamView({ t }: PropsRuntime<'conversation.view'> & Locale) {
+export function TeamView({ t, sessionId }: PropsRuntime<'conversation.view'> & Locale & InjectFace<RoomInjected>) {
   return <div style={{ padding: '12px 16px', fontSize: '13px', lineHeight: 1.6 }}>
-    <RoomBody t={t} />
+    <RoomBody t={t} sessionId={sessionId} />
   </div>
 }
 
 /**
- * 挂上三处：入口按钮、浮层、以及会话视图里的那个标签。
+ * 挂上那个标签。
  * @param ctx - 客户端的插件上下文。
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register('jubensha', { zh, en }), 'jubensha: dictionaries')
-  const handle = createRoomStore()
-  // 按钮与浮层共用同一个 store 句柄——它们在不相干的父槽下，这是唯一能把"浮层开着没有"
-  // 传过去的路。**两者必须同 scope**（`one handle, one scope`，见设计文档）。
-  const store: typeof handle = { ...handle, create: () => handle.create() }
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'jubensha.team',
@@ -356,11 +283,7 @@ export function apply(ctx: Context): void {
     order: 20,
     locale: 'jubensha',
     label: () => ctx.locale.bind('jubensha')('view.team'),
+    // 谁在看我——快照按这个 id 取。
+    inject: (sessionId: string): RoomInjected => ({ sessionId }),
   }, TeamView))
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action', id: 'jubensha.room.open', locale: 'jubensha', store,
-  }, RoomButton))
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay', id: 'jubensha.room', locale: 'jubensha', store,
-  }, RoomPanel))
 }

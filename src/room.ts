@@ -114,11 +114,12 @@ export type { RoomActor, RoomGame, RoomPlayer, RoomSnapshot } from './room-types
 /**
  * 挂 `/jubensha/room`。
  *
- * 只认 GET：面板只读，写操作全在对话里。
+ * 只认 GET：面板只读，写操作全在对话里。**必须带 `?session=<id>`**——局面是按会话存的，
+ * 没有「全局局面」这回事了（见 `index.ts` 里 `games` 的注释）。
  * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
- * @param snapshot - 取当前快照；由调用方决定数据从哪来。
+ * @param snapshot - 按会话取快照；由调用方决定数据从哪来。
  */
-export function mountRoomApi(ctx: Context, snapshot: () => Promise<RoomSnapshot>): void {
+export function mountRoomApi(ctx: Context, snapshot: (sessionId: string) => Promise<RoomSnapshot>): void {
   // 这两个服务由 index.ts 的 inject 声明；Context 的类型面没有它们（不是宿主内核包），
   // 所以在这里断言取用——与 dsh-memory 同一手法。
   const services = ctx as unknown as {
@@ -143,8 +144,8 @@ export function mountRoomApi(ctx: Context, snapshot: () => Promise<RoomSnapshot>
       }
       // prefix 路由会把子路径也送到这里，而这份快照没有子资源——多出来的路径按 404 处理，
       // 免得 /jubensha/room/anything 也回一份正常快照。
-      const pathname = new URL(request.url ?? '/', 'http://dsh.internal').pathname
-      if (pathname !== '/jubensha/room' && pathname !== '/jubensha/room/') {
+      const url = new URL(request.url ?? '/', 'http://dsh.internal')
+      if (url.pathname !== '/jubensha/room' && url.pathname !== '/jubensha/room/') {
         writeJson(res, 404, { ok: false, error: 'not-found' })
         return
       }
@@ -152,8 +153,13 @@ export function mountRoomApi(ctx: Context, snapshot: () => Promise<RoomSnapshot>
         writeJson(res, 405, { ok: false, error: 'method-error' })
         return
       }
+      const sessionId = url.searchParams.get('session')
+      if (sessionId === null || sessionId === '') {
+        writeJson(res, 400, { ok: false, error: 'missing-session' })
+        return
+      }
       try {
-        writeJson(res, 200, { ok: true, value: await snapshot() })
+        writeJson(res, 200, { ok: true, value: await snapshot(sessionId) })
       } catch (error: unknown) {
         // 只回一句人话，不回栈：这是个浏览器能打到的地方。
         writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })

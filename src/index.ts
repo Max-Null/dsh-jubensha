@@ -53,7 +53,15 @@ export const inject = ['tools', 'storage', 'webServer', 'webRuntime']
  * **单进程单局**：状态挂在模块上，不是挂在会话上。一个进程同时开两局会互相覆盖——
  * 要做多局并存，得把状态挪到会话作用域（`ctx.agents` 那条线），那是下一步的事。
  */
-let current: GameState | undefined
+/**
+ * 每个会话自己的一局。**键是 sessionId**——局面跟着会话走，不跟进程走。
+ *
+ * 这最初是进程级的一个 `let current`，理由是「单进程单局」。那在只有一个会话时成立，
+ * 而房间标签把它推翻了：标签显示的是「这个会话」的局面，所以多开两个会话打不同的本子
+ * 会各自看到错的那一局，重启之后还会集体退回「还没开局」——**看着像界面没联动，
+ * 其实是状态放错了层**。
+ */
+const games = new Map<string, GameState>()
 
 /** 工具名。 */
 const STATE_TOOL = 'jubensha_state'
@@ -186,11 +194,12 @@ function resolveBook(raw: string, seat: string): string {
 }
 
 /**
- * 现在还在不在封存期——判据本身在 `state.ts` 的 `isSealed`，这里只是把它接到这一局上。
- * @returns 复盘阶段之前一律 `true`。
+ * 某个会话现在还在不在封存期——判据本身在 `state.ts` 的 `isSealed`，这里只是把它接到那一局上。
+ * @param sessionId - 哪个会话。
+ * @returns 复盘阶段之前一律 `true`；那个会话还没开局也是 `true`（没局可泄）。
  */
-function sealed(): boolean {
-  return isSealed(current)
+function sealed(sessionId: string): boolean {
+  return isSealed(games.get(sessionId))
 }
 
 /** 复盘之前拒答时给的出路；把「现在该用什么」直接写进去，而不是只说不行。 */
@@ -448,6 +457,9 @@ function snapshot(state: GameState) {
   }
 }
 
+/** 上一次房间快照的「有没有局」结论——把端点那行日志压到只在结论变化时输出。 */
+let lastRoomHadGame: boolean | undefined
+
 /**
  * 注册局面工具；监听器与注册项随 `ctx` 生命周期销毁。
  * @param ctx - 插件上下文。
@@ -457,20 +469,27 @@ export function apply(ctx: Context): void {
   // 与「静默跳过」在外部看起来一模一样（peer 不满足时内核就是静默跳过的，界面不报错）。
   // 与 dsh-allostasis 同一条判据，它的 README「诊断」段记了来由。
   console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}, ${CASE_TOOL}, ${ACTOR_TOOL}`)
-  // 房间面板读的那一份快照。**只读**——开一局、推进阶段、发线索都在对话里说，
-  // 面板不发号施令（设计方案里「界面是附加层」那条约束）。
-  mountRoomApi(ctx, async (): Promise<RoomSnapshot> => {
+  // 房间标签读的那一份快照。**只读**——开一局、推进阶段、发线索都在对话里说，
+  // 它不发号施令（设计方案里「界面是附加层」那条约束）。
+  mountRoomApi(ctx, async (sessionId: string): Promise<RoomSnapshot> => {
     const actors = await requireActors(ctx).then(pool => pool.list())
+    const game = games.get(sessionId)
+    // 只在「有没有局」这个结论变化时输出。端点每 4 秒被拉一次，无条件打会刷屏；
+    // 而在排查「工具记的和标签查的不是同一个会话」时，这一行是外部唯一能对上号的地方。
+    if (lastRoomHadGame !== (game !== undefined)) {
+      lastRoomHadGame = game !== undefined
+      console.info(`[${name}] 房间快照 session=${sessionId} 有没有局=${String(lastRoomHadGame)}`)
+    }
     return {
-      game: current === undefined ? null : {
-        caseId: current.caseId,
-        title: current.title,
-        seats: [...current.seats],
-        humanSeat: current.humanSeat,
-        phase: current.phase,
-        round: current.round,
-        revealedClues: [...current.revealedClues],
-        finished: isFinished(current),
+      game: game === undefined ? null : {
+        caseId: game.caseId,
+        title: game.title,
+        seats: [...game.seats],
+        humanSeat: game.humanSeat,
+        phase: game.phase,
+        round: game.round,
+        revealedClues: [...game.revealedClues],
+        finished: isFinished(game),
       },
       players: players.list().map(player => ({ seat: player.seat, name: player.name })),
       // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，
@@ -541,31 +560,44 @@ export function apply(ctx: Context): void {
       },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
-    execute(args) {
+    execute(args, exec) {
+      // 局面按**会话**取：`agent.session.header.id` 是那个会话的 SessionId
+      // （同一个来源在 `agent/created` 里已经用了——`players.find(agent.session.header.id)`）。
+      // 非 agent 发起的调用（后台任务之类）拿不到它，而局面没有会话就没地方记——明确失败，
+      // 而不是把 `undefined` 传下去变成一个查不到任何东西的键。
+      const sessionId = exec.agent?.session.header.id
+      if (sessionId === undefined) throw new Error('这个工具要在会话里用——它记的局面是按会话分的。')
       switch (args.action ?? 'show') {
         case 'start': {
           const { caseId, title, seats, humanSeat } = args
           if (caseId === undefined || title === undefined || seats === undefined || humanSeat === undefined) {
             throw new Error('开局需要 caseId / title / seats / humanSeat 四项都给。')
           }
-          current = createGame({ caseId, title, seats, humanSeat })
+          games.set(sessionId, createGame({ caseId, title, seats, humanSeat }))
+          // 留痕。「工具把局面记到哪个会话下」与「标签查的是哪个会话」是两件事，它们对不上时
+          // 症状是标签永远说「还没开局」——而那个症状从外面看与"没开局"一模一样。
+          // 这一行与下面端点那一行是唯一能把两者对上号的地方（同 `loaded · registers` 的理由）。
+          console.info(`[${name}] 开局 ${caseId} 记在 session=${sessionId}`)
           break
         }
         case 'advance': {
-          if (current === undefined) throw new Error(NO_GAME)
-          current = advance(current)
+          const before = games.get(sessionId)
+          if (before === undefined) throw new Error(NO_GAME)
+          games.set(sessionId, advance(before))
           break
         }
         case 'reveal': {
-          if (current === undefined) throw new Error(NO_GAME)
-          current = revealClues(current, args.clues ?? [])
+          const before = games.get(sessionId)
+          if (before === undefined) throw new Error(NO_GAME)
+          games.set(sessionId, revealClues(before, args.clues ?? []))
           break
         }
         case 'show':
           break
       }
-      if (current === undefined) throw new Error(NO_GAME)
-      return Promise.resolve(snapshot(current))
+      const game = games.get(sessionId)
+      if (game === undefined) throw new Error(NO_GAME)
+      return Promise.resolve(snapshot(game))
     },
   }))
   // agent/created 比 spawnTeammate 返回得早，是能在玩家开口之前动手的时机。
@@ -669,7 +701,10 @@ export function apply(ctx: Context): void {
         return [{ type: 'text', text: lines.join('\n') }]
       },
     },
-    execute(args) {
+    execute(args, exec) {
+      // 封存判据按会话看：A 会话复盘了，不该顺手把 B 会话的真相也打开。
+      const sessionId = exec.agent?.session.header.id
+      if (sessionId === undefined) throw new Error('这个工具要在会话里用——封存期是按会话算的。')
       const { dir } = args
       if (dir === undefined) throw new Error('要给 dir——本子目录，或那份 case.yml 的路径。')
       const file = /\.ya?ml$/.test(dir) ? dir : join(dir, CASE_FILE)
@@ -702,7 +737,7 @@ export function apply(ctx: Context): void {
         }
         // 白名单之外的一律封到复盘。这一段是"真相保险箱"的全部实现——它不靠 DM 自觉
         // 不去看，而是**看不到**：没读过的东西，连展开操作条也翻不出来。
-        if (sealed() && !openBeforeReveal(name)) {
+        if (sealed(sessionId) && !openBeforeReveal(name)) {
           throw new Error(`"${name}" 取不到。${sealNote(name)}`)
         }
         const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
@@ -730,7 +765,7 @@ export function apply(ctx: Context): void {
         throw new Error(`这本里没有座位 "${seat}"。有这些：${loaded.roles.map(item => item.id).join('、')}`)
       }
       const full = roleBook(role)
-      if (sealed()) {
+      if (sealed(sessionId)) {
         const ref = bookRef(loaded.id, seat)
         sealedBooks.set(ref, full)
         return Promise.resolve({ caseId: loaded.id, text: bookPreview(role), ref, sealed: true, issues })

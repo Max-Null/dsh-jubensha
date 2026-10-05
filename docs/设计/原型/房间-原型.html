@@ -256,8 +256,8 @@
   <!-- ══ 中：剧本正文常驻，下面是阶段页 ══ -->
   <div class="col mid">
     <div class="paperWrap">
-      <details class="script">
-        <summary>剧本正文 · 第一幕（点这儿展开回看）</summary>
+      <details class="script" open>
+        <summary>剧本正文 · 第一幕（点这儿收起回看）</summary>
         <div class="paper">
           <h3>遗嘱与雨夜</h3>
           <p>你受周老爷委托来到庄园，目的是重新订立遗嘱。晚餐后，<mark>周老爷单独约你去书房</mark>。二十一点十五分，走廊传来一声巨响，随后一切归于寂静。</p>
@@ -307,20 +307,24 @@
       <!-- ③ 搜证 -->
       <div class="stage" data-s="search">
         <h2>搜证</h2>
-        <!-- 不做「引用到对话」按钮：DSH 本身就能选中复制，再挂一个入口既多余，又可能跟
-             「添加到会话」那类插件抢同一个位置（本机就装着一个）。 -->
-        <p class="lead">主持人一次性把线索发到桌上。要指着哪条问，选中文字复制过去就行——DSH 本来就能选、能复制。</p>
+        <!-- 「引用到对话」保留：关键是它**有自己的位置**（线索卡里那个按钮），不去抢右键菜单——
+             右键那套是「添加到会话」那类插件的入口，撞上去才是冲突。复制粘贴当然也能用，但
+             一个按钮让人少想一步。 -->
+        <p class="lead">主持人一次性把线索发到桌上。要指着哪条问，点「引用到对话」把它带进输入框；直接选中复制也行。</p>
         <div class="card clue">
           <div class="top"><span class="tag">01</span><b class="title">暗房的门是从外面锁着的</b></div>
           <div class="body">挂锁锁在门外，钥匙还在柜台的钥匙盘上。</div>
+          <div class="acts"><button class="mini">引用到对话</button></div>
         </div>
         <div class="card clue">
           <div class="top"><span class="tag">02</span><b class="title">老周右手攥着半张湿了又干的底片</b></div>
           <div class="body">攥得很紧。底片从中间撕断，上面是个模糊的女人侧影。</div>
+          <div class="acts"><button class="mini">引用到对话</button></div>
         </div>
         <div class="card clue">
           <div class="top"><span class="tag">03</span><b class="title">柜台上的账本，最后一行</b></div>
           <div class="body">铅笔写的：「21:50 定金（丽）— 退」。旁边有擦改痕迹。</div>
+          <div class="acts"><button class="mini">引用到对话</button></div>
         </div>
       </div>
 

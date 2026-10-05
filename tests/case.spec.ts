@@ -147,16 +147,25 @@ describe('加载最早写的那一本（case-01）', () => {
     expect(loaded.genre).toBe('deduction')
   })
 
-  it('它会报一处「没写现在」——那不是转换的错，是本子本来就有这个缺口', () => {
-    // 另外三张角色卡都自带身份（退休邮递员 / 做老照片生意 / 学徒），
-    // 而林默那张只写了「32 岁，周德明的侄子」——「他现在在做什么活着」这件事角色卡里没有。
-    // 第三局玩家当场问住的正是这件事（「我人物背景呢？我不知道自己现在是在做什么」），
-    // 而它在这本**最早写的**本子里就存在。转换只是把它照出来，没有替它编。
+  it('缺「现在」会报一条 warn —— 规则还在，而 case-01 的缺口已经补上了', () => {
+    // 规则本身在这里验：角色卡里没写「他现在在做什么」时该报 warn。
+    // 第三局玩家当场问住的正是这件事（「我人物背景呢？我不知道自己现在是在做什么」）。
+    const missing = loadCase([
+      'meta: { genre: drama, id: "98", title: "试", players: 2, human_slots: 1 }',
+      'scene: { setup: "占位" }',
+      'roles:',
+      '  - { id: p0, name: "甲", player: human, public: "一个人" }',
+      '  - { id: p1, name: "乙", player: ai, public: "另一个人", now: "在干活" }',
+    ].join('\n'))
+    const warned = missing.issues.filter(issue => issue.message.includes('没写「现在」'))
+    expect(warned).toHaveLength(1)
+    expect(warned[0]?.level).toBe('warn')
+    expect(warned[0]?.message).toContain('p0')
+
+    // 而 case-01 原先留白的那一处，2026-10-06 以作者的身份补上了（那本子本来就是我写的）——
+    // 它不该再报这一条。当初「不替它编」的判断没错，错在让玩家一直承担这个缺口。
     const loaded = loadCase(fixture01())
-    const missing = loaded.issues.filter(issue => issue.message.includes('没写「现在」'))
-    expect(missing).toHaveLength(1)
-    expect(missing[0]?.level).toBe('warn')
-    expect(missing[0]?.message).toContain('p0')
+    expect(loaded.issues.filter(issue => issue.message.includes('没写「现在」'))).toHaveLength(0)
   })
 
   it('除那一处之外没有别的问题——说明缺口只有一个，不是格式不合', () => {

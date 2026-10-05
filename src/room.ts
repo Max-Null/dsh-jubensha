@@ -167,3 +167,137 @@ export function mountRoomApi(ctx: Context, snapshot: (sessionId: string) => Prom
     },
   }), '@max-null/dsh-jubensha: /jubensha/room')
 }
+
+/** 演员池要能干的事——只取设置页用得上的那几件，不把整个池子交出去。 */
+export interface ActorWriter {
+  /** 招一个进来。 */
+  add(input: { id: string; name: string; style: string }): Promise<unknown>
+  /** 改名字。 */
+  setName(id: string, name: string): Promise<unknown>
+  /** 改性格。 */
+  setStyle(id: string, style: string): Promise<unknown>
+  /** 换头像；空串表示换回按 id 生成的那个。 */
+  setAvatar(id: string, image: string): Promise<unknown>
+  /** 请走。不可逆——跨局印象跟着 id 一起没。 */
+  remove(id: string): Promise<string>
+}
+
+/**
+ * 从路径里取出动作名。
+ *
+ * 抽出来是因为它是这一层唯一**能单测**的部分：整套写端点只有在浏览器里够得着，而"哪个路径
+ * 算哪个动作、哪些路径该 404"不该靠端到端去覆盖——那种覆盖要么写不出来，要么写成
+ * "我把请求伪造了一遍"。
+ * @param pathname - 请求路径。
+ * @returns 动作名；不属于这个端点时给 `undefined`。
+ */
+export function actorAction(pathname: string): string | undefined {
+  const prefix = '/jubensha/actor/'
+  if (!pathname.startsWith(prefix)) return undefined
+  const rest = pathname.slice(prefix.length)
+  // 空的一段、或者再往下还有层级，都不认——这个端点没有子资源。
+  if (rest === '' || rest.includes('/')) return undefined
+  return rest
+}
+
+/**
+ * 读一个小 JSON 请求体。
+ *
+ * 设了 64 KB 的上限：设置页发的都是几十字节，而"读一个不设上限的请求体"是白送的一个洞。
+ * @param req - 请求。
+ * @returns 解析出来的对象；空体给 `{}`。
+ */
+async function readJsonBody(req: unknown): Promise<Record<string, unknown>> {
+  const chunks: string[] = []
+  let size = 0
+  for await (const chunk of req as AsyncIterable<string | Uint8Array>) {
+    const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+    size += text.length
+    if (size > 64 * 1024) throw new Error('请求体太大了。')
+    chunks.push(text)
+  }
+  const raw = chunks.join('')
+  if (raw === '') return {}
+  const parsed: unknown = JSON.parse(raw)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('请求体要是一个 JSON 对象。')
+  }
+  return parsed as Record<string, unknown>
+}
+
+/** 从请求体里取一个必填的字符串字段。 */
+function need(body: Record<string, unknown>, field: string): string {
+  const value = body[field]
+  if (typeof value !== 'string' || value === '') throw new Error(`缺少 "${field}"，或者它不是字符串。`)
+  return value
+}
+
+/**
+ * 挂 `/jubensha/actor/<动作>`（POST）。
+ *
+ * **写端点只认自己那几个动作**，一个不多：设置页要的是"改这批字段"，而不是"随便调用池子"。
+ * 围栏与只读端点同一套（loopback 或 trustedHosts、拒 cross-site、Origin 同源）。
+ * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
+ * @param pool - 取演员池；由调用方决定什么时候开它。
+ */
+export function mountActorApi(ctx: Context, pool: () => Promise<ActorWriter>): void {
+  const services = ctx as unknown as {
+    webServer: {
+      register(descriptor: {
+        kind: string
+        path: string
+        handler: (req: unknown, res: unknown) => Promise<void> | void
+      }): () => void
+    }
+    webRuntime: { trustedHosts: readonly string[] }
+  }
+
+  ctx.effect(() => services.webServer.register({
+    kind: 'prefix',
+    path: '/jubensha/actor',
+    handler: async (req: unknown, res: unknown) => {
+      const request = req as { headers: RequestHeaders, method?: string, url?: string }
+      if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
+        writeJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if ((request.method ?? 'GET') !== 'POST') {
+        writeJson(res, 405, { ok: false, error: 'method-error' })
+        return
+      }
+      const action = actorAction(new URL(request.url ?? '/', 'http://dsh.internal').pathname)
+      if (action === undefined) {
+        writeJson(res, 404, { ok: false, error: 'not-found' })
+        return
+      }
+      try {
+        const body = await readJsonBody(req)
+        const actors = await pool()
+        let value: unknown
+        switch (action) {
+          case 'add': {
+            value = await actors.add({
+              id: need(body, 'id'),
+              name: need(body, 'name'),
+              style: typeof body['style'] === 'string' ? body['style'] : '',
+            })
+            break
+          }
+          case 'rename': value = await actors.setName(need(body, 'id'), need(body, 'name')); break
+          case 'style': value = await actors.setStyle(need(body, 'id'), need(body, 'style')); break
+          case 'avatar': value = await actors.setAvatar(need(body, 'id'), need(body, 'image')); break
+          case 'remove': value = await actors.remove(need(body, 'id')); break
+          default: {
+            writeJson(res, 404, { ok: false, error: 'not-found' })
+            return
+          }
+        }
+        writeJson(res, 200, { ok: true, value })
+      } catch (error: unknown) {
+        // 演员池抛的是人话（「演员池里没有 "x"。先 action="list" 看看都有谁。」），
+        // 那条话正是设置页该显示的东西——所以原样带出去，但不带栈。
+        writeJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    },
+  }), '@max-null/dsh-jubensha: /jubensha/actor')
+}

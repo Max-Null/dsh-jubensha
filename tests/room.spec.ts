@@ -9,7 +9,7 @@
  * fence」），本插件按跨插件不许运行时互相 import 的规矩复制了那份逻辑。
  */
 import { describe, expect, it } from 'vitest'
-import { isTrusted } from '../src/room.ts'
+import { actorAction, isTrusted } from '../src/room.ts'
 
 /** 一次正常的面板请求：浏览器同源、Host 是本机。 */
 function local(extra: Record<string, string> = {}): Record<string, string> {
@@ -68,5 +68,28 @@ describe('房间端点的围栏', () => {
 
   it('同名头有多个值时取第一个', () => {
     expect(isTrusted({ host: ['127.0.0.1:19488', 'evil.example.com'] }, [])).toBe(true)
+  })
+})
+
+describe('写端点的路径解析', () => {
+  it('五个动作都认得出', () => {
+    for (const action of ['add', 'rename', 'style', 'avatar', 'remove']) {
+      expect(actorAction(`/jubensha/actor/${action}`)).toBe(action)
+    }
+  })
+
+  it('别的路径都不认——这个端点没有子资源，也不是别的东西的别名', () => {
+    expect(actorAction('/jubensha/actor')).toBeUndefined()
+    expect(actorAction('/jubensha/actor/')).toBeUndefined()
+    expect(actorAction('/jubensha/actor/add/extra')).toBeUndefined()
+    expect(actorAction('/jubensha/room')).toBeUndefined()
+    expect(actorAction('/jubensha/actorx/add')).toBeUndefined()
+    expect(actorAction('/memory/api/list')).toBeUndefined()
+  })
+
+  it('不在动作集合里的名字也切得出来——判据不在这层', () => {
+    // 这一层只管「从路径里切出那一段」，那一段是不是真动作由 handler 的 switch 定。
+    // 分开的好处：路径形状能单测，而动作集合变了下这个测试不用动。
+    expect(actorAction('/jubensha/actor/nonsense')).toBe('nonsense')
   })
 })

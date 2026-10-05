@@ -105,6 +105,22 @@ export interface ActorPool {
    * @returns 更新后的演员。
    */
   setAvatar(id: string, image: string): Promise<Actor>
+  /**
+   * 给他改个名字。
+   * @param id - 演员 id。
+   * @param name - 新名字。
+   * @returns 更新后的演员。
+   */
+  setName(id: string, name: string): Promise<Actor>
+  /**
+   * 把他从池子里请走。
+   *
+   * **不可逆**：他攒下的跨局印象会一起没——那些印象绑在这个 id 上。所以设置页那边删之前
+   * 要问一句，而这里不做软删。
+   * @param id - 演员 id。
+   * @returns 被删掉的 id。
+   */
+  remove(id: string): Promise<string>
 }
 
 /**
@@ -176,6 +192,22 @@ export async function openActorPool(ctx: Context): Promise<ActorPool> {
         const { avatar: _dropped, ...withoutAvatar } = current
         return withoutAvatar
       })
+    },
+    setName(id, name) {
+      if (table.get(id) === undefined) {
+        throw new Error(`演员池里没有 "${id}"。先 action="list" 看看都有谁。`)
+      }
+      return table.update(id, current => ({ ...current, name }))
+    },
+    async remove(id) {
+      if (table.get(id) === undefined) {
+        throw new Error(`演员池里没有 "${id}"。先 action="list" 看看都有谁。`)
+      }
+      // `KvTable.delete` 是异步的（它等落盘），所以要 await——不然「删掉了」这句话
+      // 说出口的时候它还在池子里。
+      const gone = await table.delete(id)
+      if (!gone) throw new Error(`演员池里没有 "${id}"。`)
+      return id
     },
   }
 }

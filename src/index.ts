@@ -25,7 +25,7 @@ import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBook
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
 import { listCases } from './cases.ts'
-import { mountRoomApi } from './room.ts'
+import { mountActorApi, mountRoomApi } from './room.ts'
 import type { RoomSnapshot } from './room.ts'
 import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
 import type { GameState } from './state.ts'
@@ -504,6 +504,9 @@ export function apply(ctx: Context): void {
       })),
     }
   })
+  // 设置页要**写**演员池（改名字、改性格、换头像、请走），而只读快照给不了这个。
+  // 写端点只认那五个动作，围栏与只读那套同一份。
+  mountActorApi(ctx, () => requireActors(ctx))
   ctx.tools.register(defineTool({
     name: STATE_TOOL,
     description: describeTool(),

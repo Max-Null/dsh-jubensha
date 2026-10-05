@@ -230,7 +230,10 @@ function MidColumn({
 
   return <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px' }}>
     {game?.script !== undefined && game.script !== ''
-      ? <details open style={{
+      // **默认收起**。剧本正文是"偶尔回看"的东西，而它一展开就占满整屏——那样点了阶段页的
+      // 人第一屏看到的还是剧本，得往下滚才看见他要看的那一页。（原型里是展开的，那是为了
+      // 让人一眼看到全文；真界面上主区该是当前阶段。）
+      ? <details style={{
         border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
         borderRadius: '10px',
         background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.06))',

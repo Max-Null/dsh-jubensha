@@ -25,8 +25,15 @@ import type { RoomCase } from './room-types.ts'
  */
 export type CaseEntry = RoomCase
 
-/** 包根下的 `cases/`。 */
-function casesRoot(): string {
+/**
+ * 包根下的 `cases/`。
+ *
+ * 导出它是为了让 `jubensha_case` 能把「手打的相对路径」也认下来：`cases/04-三支药/case.yml`
+ * 看上去就该相对这一份，而进程的工作目录其实是 profile 目录（2026-10-06 实测 ENOENT 落到
+ * `profiles/ssid-dev/` 下面，把一次开局卡住了）。
+ * @returns 插件自带本子的根目录。
+ */
+export function casesRoot(): string {
   return join(dirname(fileURLToPath(import.meta.url)), '..', 'cases')
 }
 

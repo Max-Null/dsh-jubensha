@@ -28,7 +28,7 @@ import type { Actor, ActorPool } from './actor.ts'
 import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, sceneVictim, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
-import { listCases } from './cases.ts'
+import { casesRoot, listCases } from './cases.ts'
 import { openCaseDirPool } from './case-dirs.ts'
 import type { CaseDirPool } from './case-dirs.ts'
 import { openNotePool } from './notes.ts'
@@ -429,17 +429,23 @@ function tableOf(ctx: Context, sessionId: string): RoomTableRow[] {
   const lead = agents.get(SessionId(sessionId))
   if (lead === undefined) return []
   const rows: RoomTableRow[] = []
+  // **按座位去重。** 名册是「成员」的清单，而同一个座位可能有过不止一条——实测一次真局里
+  // p1/p2/p3 各出现了两遍（`listMembers` 按创建顺序给，所以后一条是后来那一位）。
+  // 一个座位在房间里只该占一行。
+  const bySeat = new Map<string, RoomTableRow>()
   for (const member of teams.listMembers(lead)) {
     if (member.role !== 'teammate') continue
     // `TeamMemberView.status` 一个字段就够做这件事：`running` 是在生成、`inactive` 是在桌上
     // 但没在跑、另外两个是上桌的过程与结果。（`phase` 是**另一个**接口 `TeamMemberProjection`
     // 上的，那是持久生命周期——两处别混。）
-    rows.push({
-      seat: member.name.split('-')[0] ?? member.name,
+    const seat = member.name.split('-')[0] ?? member.name
+    bySeat.set(seat, {
+      seat,
       running: member.status === 'running',
       phase: member.status === 'provisioning' || member.status === 'failed' ? member.status : 'active',
     })
   }
+  rows.push(...bySeat.values())
   return rows
 }
 
@@ -601,7 +607,10 @@ export function apply(ctx: Context): void {
       players: players.list().map(player => ({ seat: player.seat, name: player.name })),
       // 桌上那几位此刻在干什么。**它每次轮询都重新算**——那正是它存在的理由：`players` 是
       // 「谁在桌上」（开局就定了），而这一份说谁正忙着生成、谁还没上桌。
-      table: tableOf(ctx, sessionId),
+      //
+      // **没开局就不算**：局面在内存里，而 teammate 是持久的——重启之后会出现「这一局没了、
+      // 而那三位还在名册里」，那时候把状态摆出来只会让人以为局还开着。
+      table: game === undefined ? [] : tableOf(ctx, sessionId),
       // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，
       // 收益不抵。四本本子的 YAML 解析是毫秒级的事。
       cases: [...listCases((await requireCaseDirs(ctx)).list())],
@@ -866,12 +875,31 @@ export function apply(ctx: Context): void {
       }
       const { dir } = args
       if (dir === undefined) throw new Error('要给 dir——本子目录，或那份 case.yml 的路径；不知道有哪些本子就先 action="list"。')
-      const file = /\.ya?ml$/.test(dir) ? dir : join(dir, CASE_FILE)
-      let source: string
-      try {
-        source = readFileSync(file, 'utf8')
-      } catch (error: unknown) {
-        throw new Error(`读不到本子：${file}（${error instanceof Error ? error.message : String(error)}）`)
+      // 试两处：**原样**（绝对路径，或者相对进程工作目录）、以及**插件自带的 `cases/`**。
+      //
+      // 第二条是给手打的相对路径用的：`cases/04-三支药/case.yml` 看上去就该相对插件自带的
+      // 那一份，而进程的工作目录其实是 profile 目录——2026-10-06 一次驱动里那个 ENOENT 把
+      // 开局卡了两轮，而错误只在被拼出来的路径里看得出来。
+      const bare = dir.replace(/^\.?[\\/]/u, '').replace(/^cases[\\/]/u, '')
+      const candidates = [...new Set([
+        /\.ya?ml$/u.test(dir) ? dir : join(dir, CASE_FILE),
+        /\.ya?ml$/u.test(bare) ? join(casesRoot(), bare) : join(casesRoot(), bare, CASE_FILE),
+      ])]
+      let source: string | undefined
+      const tried: string[] = []
+      for (const file of candidates) {
+        try {
+          source = readFileSync(file, 'utf8')
+          break
+        } catch (error: unknown) {
+          // 读不到就试下一处；这一处的失败不值得单独报——两处都失败时会把两份路径一起说出来。
+          tried.push(file)
+        }
+      }
+      if (source === undefined) {
+        throw new Error('读不到本子。找过这几处：\n'
+          + tried.map(one => `  ${one}`).join('\n')
+          + '\n自带的本子用 action="list" 看路径——它给的那一串可以直接用。')
       }
       const loaded = loadCase(source)
       const issues = loaded.issues.map(issue => ({ level: issue.level, message: issue.message }))

@@ -460,18 +460,22 @@ function describeActorTool(): string {
 }
 
 /** 组装本子工具的描述：同样把「什么时候该调它」写在最前面。 */function describeCaseTool(): string {
-  return 'Read a 剧本杀 case file kept as data: which seats it has, one role\'s own brief, the clues as the '
-    + 'table sees them, or one whole section (the scene, the briefing script, the review questions). Call '
-    + 'action="load" first — it also reports the format problems it finds, and that check is the reason cases '
-    + 'are data instead of prose. Use action="book" to get one role\'s brief: before the review it returns a '
+  return 'Start with action="list": it names the cases this plugin ships (and any extra directories the user '
+    + 'added) and gives the path of each. That is the only step needing no other argument, and in a fresh '
+    + 'session it is the whole starting point — no game is running yet and the table page has nothing in '
+    + 'it, so "where do the cases live" is the one thing you cannot know. Then pass that path to '
+    + 'action="load", which also reports the format problems it finds — that check is the reason cases are '
+    + 'data instead of prose. Use action="book" to get one role\'s brief: before the review it returns a '
     + 'sealed ref instead of the text, so hand that ref to jubensha_player as its roleBook verbatim — the '
     + 'brief never passes through your context, and a player can never be handed another seat\'s brief by '
     + 'mistake. Use action="clue" to put clues on the table: it returns only what the players get to read, '
     + 'never the "what it means" part. Sections holding the answer stay sealed until the review. '
     + '剧本杀本子工具：看这本有哪几个座位 / 取某个角色的角色本 / 取线索的牌桌原文 / 取本子的某一段'
-    + '（场景、带局脚本、复盘脚本…）。先调 load，它会顺带报出格式问题——把本子做成数据就是为了这一步。'
-    + '上桌时用 book 取角色本、把返回值（复盘前是一个封存 ref）**原样**填进 jubensha_player 的 roleBook，'
-    + '不要自己转述，更不要把别的座位的发给他。线索送到桌上用 clue，它只给玩家要读的原文。'
+    + '（场景、带局脚本、复盘脚本…）。**新会话里从 action="list" 开始**——它列出自带的与用户加的那些'
+    + '本子、以及每个的路径，而那一步不需要任何别的参数（还没开局，「团队」那一页是空的，所以"本子放'
+    + '在哪儿"是你唯一没法知道的事）。拿到路径再调 load，它会顺带报出格式问题——把本子做成数据就是'
+    + '为了这一步。上桌时用 book 取角色本、把返回值（复盘前是一个封存 ref）**原样**填进 jubensha_player '
+    + '的 roleBook，不要自己转述，更不要把别的座位的发给他。线索送到桌上用 clue，它只给玩家要读的原文。'
     + '带答案的段（真相、整段线索）封到复盘，取不到是设计如此，报错里会说你该用什么。'
 }
 
@@ -693,8 +697,8 @@ export function apply(ctx: Context): void {
     parameters: {
       action: {
         type: 'string',
-        enum: ['load', 'section', 'book', 'clue'],
-        description: 'load = 加载并校验（默认）；section = 取某一段原文；book = 取某个角色的角色本；clue = 取线索的牌桌原文。',
+        enum: ['list', 'load', 'section', 'book', 'clue'],
+        description: 'list = 列出能开的那些本子（新会话里从这一步开始，它不需要 dir）；load = 加载并校验（默认）；section = 取某一段原文；book = 取某个角色的角色本；clue = 取线索的牌桌原文。',
       },
       dir: { type: 'string', description: '本子目录（读其中的 case.yml），或者直接给那份文件的路径。' },
       section: {
@@ -713,6 +717,20 @@ export function apply(ctx: Context): void {
         type: 'object',
         additionalProperties: false,
         properties: {
+          cases: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                caseId: { type: 'string' },
+                title: { type: 'string' },
+                genre: { type: 'string' },
+                seats: { type: 'number' },
+                path: { type: 'string' },
+              },
+            },
+          },
           caseId: { type: 'string' },
           title: { type: 'string' },
           genre: { type: 'string' },
@@ -749,6 +767,17 @@ export function apply(ctx: Context): void {
       render: (args, value) => {
         // load 的结果是给 DM 看的一张表；section / clue / book 取的是原文，原样交出去——
         // 角色本尤其不能在这里被重新排版，它要一字不差地到玩家手上。
+        if (args.action === 'list') {
+          // 列的这张表要**带上 path**——下一步 load 要的就是它。否则模型还得再猜一次。
+          const list = value.cases ?? []
+          if (list.length === 0) return [{ type: 'text', text: '没有可开的本子。' }]
+          return [{
+            type: 'text',
+            text: list.map(one =>
+              `case ${one.caseId ?? ''}｜${one.title ?? ''}（${one.genre ?? ''}，${String(one.seats ?? '')} 座）\n  ${one.path ?? ''}`,
+            ).join('\n'),
+          }]
+        }
         if (value.sealed === true) {
           return [{
             type: 'text',
@@ -774,8 +803,22 @@ export function apply(ctx: Context): void {
       // 封存判据按会话看：A 会话复盘了，不该顺手把 B 会话的真相也打开。
       const sessionId = exec.agent?.session.header.id
       if (sessionId === undefined) throw new Error('这个工具要在会话里用——封存期是按会话算的。')
+      // **先列本子**——这是新会话里的第一步，而它不需要 dir：本子放在插件自己的目录里，
+      // 谁也用不着先知道那个路径。这一步在 dir 检查之前，因为「我不知道该读哪儿」正是
+      // 新会话开一局时唯一真正卡住的地方（用户 2026-10-06 问的）。
+      if (args.action === 'list') {
+        return requireCaseDirs(ctx).then(dirs => Promise.resolve({
+          cases: listCases(dirs.list()).map(one => ({
+            caseId: one.id,
+            title: one.title,
+            genre: one.genre,
+            seats: one.seats,
+            path: one.path,
+          })),
+        }))
+      }
       const { dir } = args
-      if (dir === undefined) throw new Error('要给 dir——本子目录，或那份 case.yml 的路径。')
+      if (dir === undefined) throw new Error('要给 dir——本子目录，或那份 case.yml 的路径；不知道有哪些本子就先 action="list"。')
       const file = /\.ya?ml$/.test(dir) ? dir : join(dir, CASE_FILE)
       let source: string
       try {

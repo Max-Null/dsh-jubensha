@@ -18,7 +18,7 @@
  *
  * @module @max-null/dsh-jubensha/client/room
  */
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RoomCase, RoomCaseRelation, RoomSnapshot } from '../room-types.ts'
 import { avatarSvg } from '../avatar.ts'
@@ -482,9 +482,14 @@ function RightColumn({ t, said, started }: Locale & { said: readonly SaidLine[],
 export function RoomView({
   snapshot, t, said, notes,
 }: Locale & { snapshot: RoomSnapshot; said: readonly SaidLine[]; notes: React.ReactNode }) {
-  const [phase, setPhase] = useState<Phase>(
-    PHASES.includes(snapshot.game?.phase as Phase) ? snapshot.game?.phase as Phase : 'self-intro',
-  )
+  // 宿主说现在走到哪一步。客户端**不自己记进度**——进度是局面的一部分，而局面在宿主那儿。
+  const live: Phase = PHASES.includes(snapshot.game?.phase as Phase)
+    ? snapshot.game?.phase as Phase
+    : PHASES[0]
+  const reached = snapshot.game === null ? -1 : PHASES.indexOf(live)
+  // 回看：点了已经走过的哪一步，中栏就停在那儿；不点就跟着宿主走。
+  const [peek, setPeek] = useState<Phase | null>(null)
+  const shown = peek ?? live
 
   return <div data-jubensha-room="" style={{
     position: 'relative',
@@ -498,22 +503,65 @@ export function RoomView({
     display: 'flex',
     flexDirection: 'column',
   }}>
-    <div style={{ display: 'flex', gap: '4px', padding: '10px 20px 8px', flexWrap: 'wrap' }}>
-      {PHASES.map(one => <button
-        key={one}
+    {/* 阶段条。**没开局就整条不出现**——那时没有阶段可言，摆一条能点的横排只会让人以为
+        自己漏了什么（用户提的就是这个）。走到哪亮到哪，而只有**已经走过的**能点：那一下是
+        「回看」，不是「跳步」。没走到的点不动——否则可以一开局就点「复盘」，把整局推理跳掉。 */}
+    {reached >= 0 && <div style={{
+      display: 'flex', alignItems: 'center', gap: '0',
+      padding: '10px 20px 8px',
+    }}>
+      {PHASES.map((one, index) => {
+        const done = index < reached
+        const now = index === reached
+        const canPeek = index <= reached
+        return <Fragment key={one}>
+          {index > 0 && <div style={{
+            width: '18px', height: '1px', flexShrink: 0,
+            background: index <= reached
+              ? 'var(--dsw-text-secondary, rgba(127,127,127,0.85))'
+              : 'var(--dsw-border-subtle, rgba(127,127,127,0.28))',
+          }} />}
+          <button
+            type="button"
+            disabled={!canPeek}
+            onClick={() => setPeek(one === live ? null : one)}
+            title={canPeek ? undefined : t('step.notYet')}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              font: 'inherit', fontSize: '12px',
+              padding: '3px 8px', borderRadius: '7px',
+              border: 'none', background: shown === one && canPeek
+                ? 'var(--dsw-surface-sunken, rgba(127,127,127,0.12))'
+                : 'transparent',
+              color: 'inherit',
+              fontWeight: now ? 600 : 400,
+              opacity: canPeek ? 1 : 0.35,
+              cursor: canPeek ? 'pointer' : 'default',
+            }}
+          >
+            <span aria-hidden style={{
+              width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0,
+              boxSizing: 'border-box',
+              // 走过的：实心。当前：实心 + 一圈。没走到：空心。
+              background: index <= reached ? 'currentColor' : 'transparent',
+              border: index <= reached ? 'none' : '1px solid currentColor',
+              boxShadow: now ? '0 0 0 3px var(--dsw-surface-sunken, rgba(127,127,127,0.22))' : 'none',
+              opacity: done ? 0.55 : 1,
+            }} />
+            {t(`phase.${one}`)}
+          </button>
+        </Fragment>
+      })}
+      {peek !== null && <button
         type="button"
-        onClick={() => setPhase(one)}
+        onClick={() => setPeek(null)}
         style={{
-          display: 'flex', alignItems: 'center', gap: '6px',
-          font: 'inherit', fontSize: '12px', padding: '3px 8px', borderRadius: '7px', cursor: 'pointer',
-          border: 'none',
-          background: phase === one ? 'var(--dsw-surface-sunken, rgba(127,127,127,0.12))' : 'transparent',
-          color: 'inherit',
-          fontWeight: phase === one ? 600 : 400,
-          opacity: phase === one ? 1 : 0.6,
+          font: 'inherit', fontSize: '11.5px', marginLeft: '10px', padding: '3px 8px',
+          borderRadius: '7px', cursor: 'pointer', border: 'none', background: 'transparent',
+          color: 'inherit', opacity: 0.6, textDecoration: 'underline',
         }}
-      >{t(`phase.${one}`)}</button>)}
-    </div>
+      >{t('step.backToNow')}</button>}
+    </div>}
 
     <div style={{
       display: 'grid',
@@ -542,7 +590,7 @@ export function RoomView({
       <div style={{ minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
         {snapshot.game === null
           ? <OpenGame snapshot={snapshot} t={t} />
-          : <MidColumn snapshot={snapshot} phase={phase} t={t} />}
+          : <MidColumn snapshot={snapshot} phase={shown} t={t} />}
       </div>
       <div style={{
         minWidth: 0, minHeight: 0, overflowY: 'auto',

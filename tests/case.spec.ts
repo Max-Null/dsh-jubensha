@@ -186,7 +186,10 @@ describe('加载最早写的那一本（case-01）', () => {
   it('凶手那份角色本里没有凶手标记——它出现这一局就完了', () => {
     const culprit = loadCase(fixture01()).roles.find(role => role.culprit)!
     expect(roleBook(culprit)).not.toContain('凶手')
-    expect(roleBook(culprit)).toContain('马丽')
+    // 角色本的第一行是她自己的名字。这里用「阿May」而不是「马丽」——2026-10-06 把她的 `name`
+    // 从真名改成了外号：关系图按 `roles[*].name` 画节点，用真名会让图上多出一个对不上角色的
+    // 「马丽」，而账本上那个「丽」正好是它 —— 那是轻度泄底。
+    expect(roleBook(culprit)).toContain('阿May')
   })
 
   it('四个角色本的切口都对得上座位', () => {

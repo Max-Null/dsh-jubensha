@@ -27,11 +27,13 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 // 而 `ui-slots` 自己就是浏览器半边的包，主入口即是。
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { RoomSnapshot } from '../room-types.ts'
 import { RoomView } from './room.tsx'
 import { NoteLayer } from './notes.tsx'
+import { SettingsTab } from './settings.tsx'
 import { en, zh } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -136,4 +138,14 @@ export function apply(ctx: Context): void {
     // 谁在看我——快照按这个 id 取。
     inject: (sessionId: string): RoomInjected => ({ sessionId }),
   }, TeamView))
+  // 设置页。挂 `settings.plugins.tab` 而**不是** `settings.section`：功能插件不占左边那列导航，
+  // 只往「插件」那一栏贡献一个页面——所以它出现在「设置 → 插件 → 剧本杀」。
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+    name: 'settings.plugins.tab',
+    id: 'jubensha',
+    // 排在「全部插件」之后。
+    order: 20,
+    locale: 'jubensha',
+    label: () => ctx.locale.bind('jubensha')('set.tab'),
+  }, SettingsTab))
 }

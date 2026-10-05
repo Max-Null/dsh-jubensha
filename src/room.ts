@@ -170,6 +170,8 @@ export function mountRoomApi(ctx: Context, snapshot: (sessionId: string) => Prom
 
 /** 演员池要能干的事——只取设置页用得上的那几件，不把整个池子交出去。 */
 export interface ActorWriter {
+  /** 池子里有谁。**不需要会话**：演员是跨会话的。 */
+  list(): Promise<unknown>
   /** 招一个进来。 */
   add(input: { id: string; name: string; style: string }): Promise<unknown>
   /** 改名字。 */
@@ -278,6 +280,16 @@ export function mountActorApi(ctx: Context, pool: () => Promise<ActorWriter>): v
       const request = req as { headers: RequestHeaders, method?: string, url?: string }
       if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
         writeJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if ((request.method ?? 'GET') === 'GET') {
+        // 读走 GET、写走 POST——设置页两样都要，而演员池**不需要会话**（它跟着人走），
+        // 所以这一条没有 `?session=`，与房间快照那条不同。
+        try {
+          writeJson(res, 200, { ok: true, value: await (await pool()).list() })
+        } catch (error: unknown) {
+          writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
         return
       }
       if ((request.method ?? 'GET') !== 'POST') {

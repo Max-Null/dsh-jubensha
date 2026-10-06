@@ -548,6 +548,43 @@ function snapshot(state: GameState) {
   }
 }
 
+/**
+ * 真人在这场对话里说过几句。
+ *
+ * 数的是 `agent/inbox/spliced` 里 `source.kind === 'user'` 的条数——那一条就是「他按了回车」。
+ * 它是**节奏闸**的判据：AI 连着说了几轮而真人的话数一直没变，说明他根本没插进来。
+ *
+ * **为什么用会话事件而不是自己记**：真人在对话页打字，插件的任何写端点都看不到——那是宿主
+ * 内核 append 的事件，而 `session.snapshotEvents()` 是读它的现成口子（`agent/inbox/spliced`
+ * 在 `known-event-types.ts` 里，宿主侧读得到）。
+ * @param agent - 主持人的 agent（它手里有那个会话）。
+ * @returns 真人在这个会话里发过几条消息。
+ */
+function humanLines(agent: Agent): number {
+  let count = 0
+  for (const event of agent.session.snapshotEvents()) {
+    if (event.type !== 'agent/inbox/spliced') continue
+    const inserted: unknown = event.data.inserted
+    if (!Array.isArray(inserted)) continue
+    for (const one of inserted) {
+      if (typeof one !== 'object' || one === null) continue
+      if ((one as { source?: { kind?: unknown } }).source?.kind === 'user') count += 1
+    }
+  }
+  return count
+}
+
+/**
+ * 每个会话：上一次 `say` 时真人的话数，以及从那以后 AI 主动推进了几次。
+ *
+ * 它是「AI 自己玩得开心、真人插不进」那个问题的**结构修**：那件事我改过两轮开局指令都没管住
+ * （用户两次反馈），而指令只是请求——这一条是闸。
+ */
+const sayStreak = new Map<string, { human: number, count: number }>()
+
+/** 连着几次 AI 主动发言而真人没插进来，就该拦一次。 */
+const SAY_STREAK_LIMIT = 3
+
 /** 上一次房间快照的「有没有局」结论——把端点那行日志压到只在结论变化时输出。 */
 let lastRoomHadGame: boolean | undefined
 
@@ -1213,7 +1250,7 @@ export function apply(ctx: Context): void {
     },
     async execute(args, exec) {
       let delivered: string | undefined
-      const session = exec.agent?.session.header.id
+      const session = String(exec.agent?.session.header.id ?? '')
       const game = session === undefined ? undefined : games.get(session)
       switch (args.action ?? 'list') {
         case 'spawn': {
@@ -1280,6 +1317,25 @@ export function apply(ctx: Context): void {
           if (seat === undefined || message === undefined) throw new Error('say 需要 seat 与 message 两项都给。')
           const dm = exec.agent
           if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
+          // **节奏闸**：DM 主动推进（`say`）而真人连着三轮没插进来时，拦一次。
+          //
+          // 拦的是 `say` 而不是 `relay`：`relay` 是转达某位玩家刚说的话，掐断它等于掐断对话本身；
+          // 而 `say` 是主持人**主动**往前推——那正是"没有真人也能跑"的来源。
+          //
+          // 判据是会话事件里真人的消息条数（见 `humanLines`），不是我们的任何登记表：真人打字
+          // 只经过内核，插件的端点看不到。
+          const human = humanLines(dm)
+          const streak = sayStreak.get(session)
+          const count = streak !== undefined && streak.human === human ? streak.count + 1 : 1
+          if (count > SAY_STREAK_LIMIT) {
+            throw new Error(
+              `先停一下：你已经连着推进 ${String(count - 1)} 次，而真人一句没说——这一局快变成`
+              + '你带着三个 AI 自己玩了。\n'
+              + '把话头交给他：说一句「轮到你了，你怎么看」或者点他的角色名问他一个具体的问题，'
+              + '**然后结束这一轮**（不要再调工具），他就会在输入框里接上。他接上之后你再继续。',
+            )
+          }
+          sayStreak.set(session, { human, count })
           // seat="*" 是说给全桌听：桌上每个人都该听见，一条命令发出去，程序保证一个都不漏。
           // 逐个手发正是"漏掉某个人"的来源，而漏掉的那个不会知道自己漏了什么。
           const listeners = seat === '*' ? players.list() : [requirePlayer(seat)]

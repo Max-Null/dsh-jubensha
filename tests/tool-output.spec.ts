@@ -49,8 +49,45 @@ function registeredTools(): RegisteredTool[] {
   return collected
 }
 
-/** 一个够用的执行上下文：工具只读 `exec.agent.session.header.id`。 */
-const exec = { agent: { session: { header: { id: 'spec-session' } } } }
+/**
+ * 一个够用的执行上下文。
+ *
+ * `snapshotEvents` 不是可有可无的：`jubensha_player` 的节奏闸要数真人在这个会话里说过几句
+ * （见 `src/index.ts` 的 `humanLines`），而它读的就是这个口子。
+ */
+const exec = {
+  agent: {
+    session: {
+      header: { id: 'spec-session' },
+      snapshotEvents: () => [],
+    },
+  },
+}
+
+/**
+ * 一个「真人可以开口」的上下文——`speak()` 之前他的消息数是 0，之后是 1。
+ *
+ * **必须是可变的一格**：节奏闸的判据是「真人的话数变了没有」，而写死的 `snapshotEvents`
+ * 永远返回同一个数，于是「他一开口计数就归零」这件事压根测不出来（第一版就是这么错的）。
+ * @param id - 会话 id；每条测试给不同的值，好把节奏闸的计数隔开。
+ * @returns 上下文与那个翻开关的开关。
+ */
+function execWhereHumanSpeaks(id: string): { context: unknown, speak: () => void } {
+  let spoken = false
+  return {
+    context: {
+      agent: {
+        session: {
+          header: { id },
+          snapshotEvents: () => (spoken
+            ? [{ type: 'agent/inbox/spliced', data: { inserted: [{ source: { kind: 'user' } }] } }]
+            : []),
+        },
+      },
+    },
+    speak: () => { spoken = true },
+  }
+}
 
 describe('工具的返回与它声明的输出', () => {
   const tools = registeredTools()
@@ -103,5 +140,56 @@ describe('工具的返回与它声明的输出', () => {
     const tool = tools.find(one => one.name === 'jubensha_state')
     const value = await tool?.execute({ action: 'show' }, exec) as Record<string, unknown>
     expectDeclared('jubensha_state', tool, value)
+  })
+})
+
+describe('节奏闸：AI 不能自己一直玩下去', () => {
+  const tools = registeredTools()
+  const say = { action: 'say', seat: '*', message: '先说一遍你昨晚的经历' }
+
+  /**
+   * 跑一次 `say`，返回它的报错文案（没抛就给空串）。
+   * @param context - 执行上下文。
+   * @param id - 会话 id（每条测试自己一个，别撞到别人的计数）。
+   * @returns 抛出来的那句话。
+   */
+  async function sayOnce(context: unknown): Promise<string> {
+    const tool = tools.find(one => one.name === 'jubensha_player')
+    try {
+      await tool?.execute(say, context)
+      return ''
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  it('连着推进三次而真人没插进来，第四次会被拦住', async () => {
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+    }, exec)
+    // 前三次：闸放行——它们随后会撞在「桌上还没有 AI 玩家」上（这条测试只关心闸的计数，
+    // 而 spawn 要 Team 服务，这里给的是 undefined）。
+    for (let index = 0; index < 3; index += 1) {
+      expect(await sayOnce(exec)).toContain('桌上还没有 AI 玩家')
+    }
+    // 第四次：闸该拦下来，而它说的是「把话头交给他」——那是这个闸存在的全部理由。
+    expect(await sayOnce(exec)).toContain('先停一下')
+  })
+
+  it('真人一开口，计数就从头开始', async () => {
+    const state = tools.find(one => one.name === 'jubensha_state')
+    const { context, speak } = execWhereHumanSpeaks('spec-session-with-human')
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+    }, context)
+    // 他没开口时连着推三次，第四次会被拦。
+    for (let index = 0; index < 3; index += 1) await sayOnce(context)
+    expect(await sayOnce(context)).toContain('先停一下')
+    // **他开口之后**：计数归零，于是又能往下推了。
+    speak()
+    expect(await sayOnce(context)).toContain('桌上还没有 AI 玩家')
   })
 })

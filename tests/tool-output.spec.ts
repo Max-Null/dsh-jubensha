@@ -135,6 +135,22 @@ describe('工具的返回与它声明的输出', () => {
     expectDeclared('jubensha_player', tool, value)
   })
 
+  it('真人不在 notSeated 里——他不是「还没上桌」，他是不用上桌', async () => {
+    // 这一条是从一局实测的日志里揪出来的：那一刻 `list` 返回的是
+    //   {"players": [], "humanSeat": "p0", "notSeated": ["p0","p1",…]}
+    // ——真人躺在「还没上桌」里。他永远不在 `players` 里（他不 spawn），所以照「谁不在 players
+    // 里」算的话他永远出现，而那个返回值到了 DM 手里就成了「真人还没上桌」。
+    //
+    // 这是同一个 gap 的第五次（前四次：DM 自己把局跑完、头像成灰块、自述页「还没上桌」、
+    // 问话页「还没出过声」）。前四次我都在读者那里补一句；这一次修在数据上。
+    await startGame()
+    const tool = tools.find(one => one.name === 'jubensha_player')
+    const value = await tool?.execute({ action: 'list' }, exec) as { notSeated: string[] }
+    expect(value.notSeated).not.toContain('p0')
+    // 而 AI 那三位还在里面（他们确实还没被叫上桌）。
+    expect(value.notSeated).toEqual(['p1', 'p2', 'p3'])
+  })
+
   it('开一局之后，局面的返回里也没有 schema 没声明的键', async () => {
     await startGame()
     const tool = tools.find(one => one.name === 'jubensha_state')

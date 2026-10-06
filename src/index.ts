@@ -1299,7 +1299,7 @@ export function apply(ctx: Context): void {
       action: {
         type: 'string',
         enum: ['list', 'spawn', 'say', 'relay', 'unseat'],
-        description: 'list = 看桌上都有谁（默认）——**返回里含 humanSeat（真人坐在哪个位子）与 notSeated（还没上桌的位子）**；spawn = 让一位 AI 玩家上桌；say = 把一句话说给某位玩家或全桌；relay = 把某位玩家刚说的话转达给桌上其余人；unseat = 从座位上撤掉这位玩家。',
+        description: 'list = 看桌上都有谁（默认）——**返回里含 humanSeat（真人坐在哪个位子）与 notSeated（还没叫上桌的 AI 位）**；spawn = 让一位 AI 玩家上桌；say = 把一句话说给某位玩家或全桌；relay = 把某位玩家刚说的话转达给桌上其余人；unseat = 从座位上撤掉这位玩家。',
       },
       seat: { type: 'string', description: 'spawn / say / relay / unseat 用：座位 id，要与局面里的 seats 用同一套命名。say 也可以用 "*" 表示说给全桌听。' },
       name: { type: 'string', description: 'spawn 用：角色名。' },
@@ -1455,7 +1455,16 @@ export function apply(ctx: Context): void {
         // 真人坐在哪儿，以及还有哪些位子没人。
         ...(game === undefined ? {} : {
           humanSeat: game.humanSeat,
-          notSeated: game.seats.filter(seat => !players.list().some(one => one.seat === seat)),
+          // **真人不在 notSeated 里。** 他永远不在 `players` 里（他不 spawn），所以照
+          // 「谁不在 players 里」算的话他永远出现——而那个返回值到了 DM 手里就成了
+          // 「真人还没上桌」（2026-10-06 实测：`notSeated` 里躺着 p0，而玩家那边看到的是
+          // 「林默 还没上桌」）。他不是「还没上桌」，他是**不用上桌**：那个位子本来就有人，
+          // 而那个人是自己走进来的。
+          //
+          // 这是同一个 gap 的第五次（前四次：DM 自己把局跑完、头像成灰块、自述页写「还没上桌」、
+          // 问话页「还没出过声」）。前四次我都在**读者**那里补一句；这一次修在**数据**上。
+          notSeated: game.seats.filter(seat => seat !== game.humanSeat
+            && !players.list().some(one => one.seat === seat)),
         }),        ...delivered !== undefined ? { delivered } : {},
       }
     },

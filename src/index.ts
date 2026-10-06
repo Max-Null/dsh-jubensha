@@ -1166,6 +1166,11 @@ export function apply(ctx: Context): void {
             },
           },
           delivered: { type: 'string' },
+          // 这两个是 2026-10-06 加的（DM 眼里「桌上只有三个人」，因为 `players` 里从来没有真人）。
+          // **加返回值时必须同步加这里**：schema 是 `additionalProperties: false`，少写一个键，
+          // 整个工具的每一次调用都会被内核判为非法输出——连 `list` 都调不动。
+          humanSeat: { type: 'string' },
+          notSeated: { type: 'array', items: { type: 'string' } },
         },
       },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],

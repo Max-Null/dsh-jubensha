@@ -18,7 +18,7 @@
  *
  * @module @max-null/dsh-jubensha/client/room
  */
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RoomCase, RoomCaseRelation, RoomSnapshot } from '../room-types.ts'
 import { avatarSvg } from '../avatar.ts'
@@ -561,6 +561,65 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
 }
 
 /**
+ * 房间根该多高——**量出来，不是算常数**。
+ *
+ * 这一段是「父容器的高度依赖我、我的高度依赖父容器」那个死循环的出口。父容器
+ * `.AMI9gG_viewArea` 是 `flex: 1 0 auto`——`basis: auto` 加 `shrink: 0`，意思是「我要内容那么高」，
+ * 而它的内容就是这个房间；房间里三栏摊开一万多像素。纯 CSS 里两边都等对方先说，浏览器只能取
+ * 「内容的高」，于是整页滚。
+ *
+ * 所以从这里问一个**不依赖父容器**的数：滚动容器 `.AMI9gG_scrollBody` 的高是确定的（它的
+ * 上面几层都是 `flex: 1 1 0%`，一路到有确定高度的根），减掉我在它里面的位置、再减掉底下
+ * composer 那一段——**而那一段正是 `ask_user_question` 的卡片会撑高的地方**，也就是用户报的那
+ * 两次滚动的来源（2026-10-06）。
+ *
+ * @param root - 房间根元素。
+ * @returns 可用的高（像素）；量不出来时给 `null`，调用方退回一个保守值。
+ */
+function measureRoomHeight(root: HTMLElement): number | null {
+  const scroll = root.closest('[class*="scrollBody"]')
+  if (scroll === null) return null
+  const scrollBox = scroll.getBoundingClientRect()
+  if (scrollBox.height <= 0) return null
+  const above = root.getBoundingClientRect().top - scrollBox.top
+  const seat = scroll.querySelector('[class*="composerSeat"]')
+  const below = seat === null ? 0 : scrollBox.bottom - seat.getBoundingClientRect().top
+  // 240 是下限：再矮就三栏都看不见东西了，那时候宁可让整页滚一下。
+  return Math.max(240, Math.round(scrollBox.height - above - below))
+}
+
+/**
+ * 房间根，按量出来的高度撑开。
+ *
+ * 首次渲染还没有量过的值时给一个保守的常数——`useLayoutEffect` 在绘制前就会把它换成真值，
+ * 所以那一帧用户看不见。
+ *
+ * ref 用回调式而不是 `useRef`：这个项目的 `@types/react` 把 `useRef<T>(null)` 定成
+ * `RefObject<T | null>`，而 `ref` 属性在它那份声明里只收 `RefObject<T>`，两者对不上。
+ * @returns 挂到根上的 ref 与当下的高度。
+ */
+function useRoomHeight(): { ref: (node: HTMLDivElement | null) => void, height: number | null } {
+  const [root, setRoot] = useState<HTMLDivElement | null>(null)
+  const [height, setHeight] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    if (root === null) return undefined
+    const measure = (): void => {
+      const next = measureRoomHeight(root)
+      if (next !== null) setHeight(next)
+    }
+    measure()
+    // composer 那一段变高（弹窗）、窗口缩放、侧栏折叠——都会改变可用空间，所以两个都看着。
+    const scroll = root.closest('[class*="scrollBody"]')
+    const observer = new ResizeObserver(measure)
+    observer.observe(scroll ?? root)
+    const seat = scroll?.querySelector('[class*="composerSeat"]')
+    if (seat !== null && seat !== undefined) observer.observe(seat)
+    return () => observer.disconnect()
+  }, [root])
+  return { ref: setRoot, height }
+}
+
+/**
  * 中栏：剧本正文 + 当前阶段那一页。
  * @param props - 快照、当前看哪一页、以及切换用的回调。
  * @returns 主区。
@@ -933,16 +992,14 @@ export function RoomView({
   // 回看：点了已经走过的哪一步，中栏就停在那儿；不点就跟着宿主走。
   const [peek, setPeek] = useState<Phase | null>(null)
   const shown = peek ?? live
+  const { ref: rootRef, height } = useRoomHeight()
 
-  return <div data-jubensha-room="" style={{
+  return <div data-jubensha-room="" ref={rootRef} style={{
     position: 'relative',
-    // 高度定在**这一层**，减掉的两个数都是量出来的：
-    // · 118 = 顶部两条栏（标签栏 + 标题栏）——窗口 873 减滚动容器 755；
-    // · 128 = 下面那个输入框的占位（`.composerSeat`，实测高 128）。**它在滚动容器内部**，
-    //   所以不扣掉它，整页就还能往下滚 128px；滚到底时上面那截被推出视野——表现就是
-    //   「三栏各自滚了，而整页还能滚，且顶部被切掉一块」。
-    // 上面那行阶段按钮（40px）不用单独扣：根做 flex 列，三栏那一层吃剩下的。
-    height: 'calc(100vh - 246px)',
+    // **高度是量出来的，不是减出来的。** 为什么不写 `calc(100vh - 246px)`、也不写
+    // `height: 100%`，见 `useRoomHeight` 上面那段——一句话：父容器的高度依赖我，我的高度依赖
+    // 父容器，纯 CSS 里出不来。量出来的值放在行内，首帧那个常数只是兜底。
+    height: height === null ? 'calc(100vh - 246px)' : `${height}px`,
     display: 'flex',
     flexDirection: 'column',
   }}>

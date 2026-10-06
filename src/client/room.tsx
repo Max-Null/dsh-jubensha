@@ -1023,8 +1023,23 @@ function SaidColumn({ t, said, started, seatNames, humanSeat }: Locale & {
   humanSeat: string
 }) {
   const lines = said.filter(isSaid)
+  // 真人这一局说过几句——**这一条算不准**，所以只用来决定那句话的轻重，不用来判断「轮到谁」：
+  // 开局那条指令（真人在对话里打的那句）也是一条 `user` 消息，而 `said` 里没有「局面是从哪一句
+  // 开始的」这个标记。试过用 `mineCount === 0` 当判据，结果是开局之后横幅立刻消失。
+  const mineCount = lines.filter(one => one.from === 'user').length
   return <div style={{ padding: '14px 16px', boxSizing: 'border-box' }}>
     <Heading>{t('right.said')}</Heading>
+    {/* **常驻**，不按「说过没有」判。判据不可靠时不该假装有判据——这里就是一句「怎么说话」的
+        说明，而它的用场是**一直提醒他有个位子**（用户两次反馈「完全没我啥事」，而 DM 那边的
+        节奏靠开局指令管、改了两轮都没管住）。 */}
+    {started
+      ? <div style={{
+        marginBottom: '10px', padding: '6px 10px', borderRadius: '8px',
+        background: 'hsl(210 62% 48% / 0.10)',
+        borderLeft: '3px solid var(--dsw-accent, #4a7fd4)',
+        fontSize: '11.5px', lineHeight: 1.6, opacity: mineCount === 0 ? 1 : 0.7,
+      }}>{t('right.yourTurn')}</div>
+      : null}
     {!started && lines.length > 0
       ? <div style={{ fontSize: '11.5px', opacity: 0.6, marginBottom: '8px', lineHeight: 1.5 }}>
         {t('right.notStarted')}

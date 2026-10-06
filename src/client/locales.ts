@@ -23,6 +23,8 @@ export const zh = {
 
   // 左栏
   'left.table': '这一桌',
+  'left.scene': '现场',
+  'left.deathWindow': '死亡时间窗',
   'left.relationMissing': '（本子里没写）',
   'left.noRelations': '这本子没写人物关系。',
   'left.between': '彼此之间',
@@ -129,6 +131,8 @@ export const en = {
   'phase.reveal': 'Reveal',
 
   'left.table': 'At the table',
+  'left.scene': 'The scene',
+  'left.deathWindow': 'Time of death',
   'left.relationMissing': '(not written in this case)',
   'left.noRelations': 'This case does not describe any relations.',
   'left.between': 'Between them',

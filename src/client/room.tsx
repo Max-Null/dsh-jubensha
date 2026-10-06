@@ -403,6 +403,26 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
     caseEntry?.roles.find(role => role.id === seat) as { name: string; public: string } | undefined
 
   return <div style={{ padding: '14px 16px', boxSizing: 'border-box' }}>
+    {/* 现场：谁死了、怎么死的、大概是几点。
+        放在最上面，因为这是开局就该知道的事——原先它只在「搜证」页的线索卡里间接露面，
+        而玩家读到「后脑撞在工位隔断的金属包边上」时已经问了三轮话（用户 2026-10-06 报的：
+        「关于韩松死亡和验尸的描述，我没有在事件背景或搜证里看到」）。 */}
+    {game?.victim == null ? null : <section style={{ marginBottom: '18px' }}>
+      <Heading>{t('left.scene')}</Heading>
+      <div style={{ fontSize: '12px', lineHeight: 1.6 }}>
+        <b>{game.victim.name}</b>
+        {game.victim.age === 0 ? null : <span style={{ opacity: 0.65 }}>　{game.victim.age} 岁</span>}
+        {game.victim.cause === ''
+          ? null
+          : <div style={{ opacity: 0.85, marginTop: '2px' }}>{game.victim.cause}</div>}
+        {game.victim.timeWindow.length < 2
+          ? null
+          : <div style={{ opacity: 0.65, fontSize: '11.5px', marginTop: '3px' }}>
+            {t('left.deathWindow')}　{game.victim.timeWindow.join(' – ')}
+          </div>}
+      </div>
+    </section>}
+
     <section style={{ marginBottom: '18px' }}>
       <Heading>{t('left.table')}</Heading>
       {seats.length === 0

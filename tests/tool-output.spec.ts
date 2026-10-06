@@ -192,4 +192,33 @@ describe('节奏闸：AI 不能自己一直玩下去', () => {
     speak()
     expect(await sayOnce(context)).toContain('桌上还没有 AI 玩家')
   })
+
+  it('转达也过闸——这一条是被实测逼出来的', async () => {
+    // 上一版只拦 `say`，理由是「拦 relay 等于掐断对话」。而实测（2026-10-06 用户报的第三局）：
+    // `say` 两次（没到阈值）而 `relay` 转了十二次——六个来回，真人一句没说。
+    // 转达十几轮而不叫他，与推三个阶段是同一个效果。
+    const state = tools.find(one => one.name === 'jubensha_state')
+    const context = {
+      agent: { session: { header: { id: 'spec-session-relay' }, snapshotEvents: () => [] } },
+    }
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+    }, context)
+    const tool = tools.find(one => one.name === 'jubensha_player')
+    /** 跑一次 relay，返回它的报错文案。 */
+    const relayOnce = async (): Promise<string> => {
+      try {
+        await tool?.execute({ action: 'relay', seat: 'p1' }, context)
+        return ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    // 前三次：闸放行，随后撞在「座位上没有人」上（这条测试只关心闸的计数）。
+    for (let index = 0; index < 3; index += 1) {
+      expect(await relayOnce()).not.toContain('先停一下')
+    }
+    expect(await relayOnce()).toContain('先停一下')
+  })
 })

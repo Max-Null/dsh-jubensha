@@ -25,6 +25,7 @@ import type {} from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { openActorPool } from './actor.ts'
 import type { Actor, ActorPool } from './actor.ts'
+import { DM_HANDBOOK } from './dm-handbook.ts'
 import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, sceneTruth, sceneVictim, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
@@ -575,15 +576,48 @@ function humanLines(agent: Agent): number {
 }
 
 /**
- * 每个会话：上一次 `say` 时真人的话数，以及从那以后 AI 主动推进了几次。
+ * 每个会话：上一次闸放行时真人的话数，以及从那以后 AI 侧说了几次。
  *
  * 它是「AI 自己玩得开心、真人插不进」那个问题的**结构修**：那件事我改过两轮开局指令都没管住
  * （用户两次反馈），而指令只是请求——这一条是闸。
+ *
+ * **`say` 与 `relay` 一起计数**：第一版只算 `say`，理由是「拦 `relay` 等于掐断对话」——而那个
+ * 判断漏了一半。实测（2026-10-06 用户报的第三局）：`say` 只有 2 次（没到阈值），而 `relay`
+ * 转了 12 次——六个来回，真人一句没说。**转达十几次而不叫真人，与推三个阶段是同一个效果。**
  */
 const sayStreak = new Map<string, { human: number, count: number }>()
 
 /** 连着几次 AI 主动发言而真人没插进来，就该拦一次。 */
 const SAY_STREAK_LIMIT = 3
+
+/**
+ * 节奏闸——AI 侧每说一句话都过一遍它。
+ *
+ * **在做出决定的那一步执行**：包规矩里写着 prompt 与 schema 都算不上 enforcement，而这里闸就在
+ * 那次调用里。过不了就抛，抛出来的那句话要**带着出路**（不是「不准」，是「怎么办」）。
+ *
+ * `say` 与 `relay` 都调它。判据是会话事件里真人的消息条数（见 `humanLines`）——不是我们的任何
+ * 登记表：真人打字只经过内核，插件的端点看不到。
+ * @param session - 会话 id（闸按会话记）。
+ * @param dm - 主持人的 agent。
+ */
+function checkPace(session: string, dm: Agent): void {
+  const human = humanLines(dm)
+  const streak = sayStreak.get(session)
+  const count = streak !== undefined && streak.human === human ? streak.count + 1 : 1
+  if (count > SAY_STREAK_LIMIT) {
+    throw new Error(
+      `先停一下：AI 这边已经连着说了 ${String(count - 1)} 次，而真人一句没说——这一局快变成`
+      + '你带着三位 AI 自己玩了（他就算想插，也没有落点）。\n'
+      + '把话头交给他，然后**停下来**：\n'
+      + '· 在对话里对他说一句「轮到你」类的转场，或者直接点他的角色名问一个具体的问题'
+      + '（「你昨晚几点走的」好过「你想说什么」）；\n'
+      + '· **然后把这一轮结束掉**——不要再调任何工具，也不要转达下一位玩家的话。\n'
+      + '他会在下面那个输入框里接上。他接上之后，你想怎么推都行。',
+    )
+  }
+  sayStreak.set(session, { human, count })
+}
 
 /** 上一次房间快照的「有没有局」结论——把端点那行日志压到只在结论变化时输出。 */
 let lastRoomHadGame: boolean | undefined
@@ -627,6 +661,26 @@ export function apply(ctx: Context): void {
   // 与「静默跳过」在外部看起来一模一样（peer 不满足时内核就是静默跳过的，界面不报错）。
   // 与 dsh-allostasis 同一条判据，它的 README「诊断」段记了来由。
   console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}, ${CASE_TOOL}, ${ACTOR_TOOL}`)
+  // **DM 行为手册**，注册成一条运行时 skill。
+  //
+  // **为什么是 skill 而不是塞进开局指令**（`instruction.ts` 里那七条是浓缩版）：开局指令每局
+  // 只读一次，而带局是**一边走一边要查**的——盘问到一半、「我刚才是不是替他说话了」、
+  // 「这条行踪该不该记」。而且塞进指令就只能留结论，这份手册里每一条都带着**它是哪一局踩出来的**，
+  // 那才是它有用的地方：一条没有来由的规矩，遇到边界情况时不知道该怎么让。
+  //
+  // `ctx.get('skills')` 而不是 `ctx.skills`：那是可选服务，而包规矩里写着可选服务用 `ctx.get`
+  // ——属性代理对拓扑敏感，`get` 读的是全局服务表。
+  const skills = ctx.get('skills')
+  if (skills !== undefined) {
+    ctx.effect(() => skills.register({
+      name: 'jubensha-dm',
+      description: '第一次带一局剧本杀之前读它——主持人的七条规矩，每一条都写着是哪一局踩出来的。'
+        + '盘问到一半拿不准（该不该替真人做选择、这条行踪要不要记、AI 是不是聊太久了）时也读它。',
+      whenToUse: '你正要开一局剧本杀、或者正在带局而拿不准节奏的时候。',
+      source: 'runtime',
+      content: DM_HANDBOOK,
+    }), 'jubensha: dm handbook skill')
+  }
   // 房间标签读的那一份快照。**只读**——开一局、推进阶段、发线索都在对话里说，
   // 它不发号施令（设计方案里「界面是附加层」那条约束）。
   mountRoomApi(ctx, async (sessionId: string): Promise<RoomSnapshot> => {
@@ -1317,25 +1371,7 @@ export function apply(ctx: Context): void {
           if (seat === undefined || message === undefined) throw new Error('say 需要 seat 与 message 两项都给。')
           const dm = exec.agent
           if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
-          // **节奏闸**：DM 主动推进（`say`）而真人连着三轮没插进来时，拦一次。
-          //
-          // 拦的是 `say` 而不是 `relay`：`relay` 是转达某位玩家刚说的话，掐断它等于掐断对话本身；
-          // 而 `say` 是主持人**主动**往前推——那正是"没有真人也能跑"的来源。
-          //
-          // 判据是会话事件里真人的消息条数（见 `humanLines`），不是我们的任何登记表：真人打字
-          // 只经过内核，插件的端点看不到。
-          const human = humanLines(dm)
-          const streak = sayStreak.get(session)
-          const count = streak !== undefined && streak.human === human ? streak.count + 1 : 1
-          if (count > SAY_STREAK_LIMIT) {
-            throw new Error(
-              `先停一下：你已经连着推进 ${String(count - 1)} 次，而真人一句没说——这一局快变成`
-              + '你带着三个 AI 自己玩了。\n'
-              + '把话头交给他：说一句「轮到你了，你怎么看」或者点他的角色名问他一个具体的问题，'
-              + '**然后结束这一轮**（不要再调工具），他就会在输入框里接上。他接上之后你再继续。',
-            )
-          }
-          sayStreak.set(session, { human, count })
+          checkPace(session, dm)
           // seat="*" 是说给全桌听：桌上每个人都该听见，一条命令发出去，程序保证一个都不漏。
           // 逐个手发正是"漏掉某个人"的来源，而漏掉的那个不会知道自己漏了什么。
           const listeners = seat === '*' ? players.list() : [requirePlayer(seat)]
@@ -1347,13 +1383,20 @@ export function apply(ctx: Context): void {
         case 'relay': {
           const { seat } = args
           if (seat === undefined) throw new Error('relay 需要 seat——要转达哪一位玩家刚说的话。')
+          const dm = exec.agent
+          if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
+          // **转达也过闸，而且闸在最前面。** 第一版只拦 `say`，理由是「拦 `relay` 等于掐断对话」
+          // ——而实测证明那个判断漏了一半：`say` 两次（没到阈值）而 `relay` 转了十二次，六个来回，
+          // 真人一句没说。转达十几轮而不叫他，与推三个阶段是同一个效果。
+          //
+          // 放在 `requirePlayer` 之前：那两句是「这一位还没开过口」之类的**前置检查**，而闸问的是
+          // 「现在该不该说」——后者更靠前。
+          checkPace(session, dm)
           const speaker = requirePlayer(seat)
           const said = players.lastSaid(seat)
           if (said === undefined) {
             throw new Error(`${speaker.name} 还没开过口——没有可转达的话。`)
           }
-          const dm = exec.agent
-          if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
           const others = players.list().filter(player => player.seat !== seat)
           if (others.length === 0) throw new Error(`桌上只有 ${speaker.name} 一个人，没有人可转达。`)
           // 带上说话人：收信人的默认预期是"主持人在跟我说话"，不加署名会把这句当成我的话。

@@ -126,6 +126,11 @@ export function playerBrief(input: BriefInput): string {
   )
   parts.push(`--- 你的角色本 ---\n${input.roleBook}\n--- 角色本结束 ---`)
   parts.push('角色本没写的事，你就是不知道。想知道，去问别人。')
+  parts.push(
+    '**一次说一两句。** 这是桌上说话，不是写文档——你一开口就两百字，别人的话就插不进来了，'
+      + '而同桌那位真人尤其会觉得自己被关在外面（用户 2026-10-06 报的原话：「除非他们讨论完，'
+      + '不太像一人一句」）。被人问就答，答完就停；要追问谁，问一句就等回话。',
+  )
   return parts.join('\n\n')
 }
 

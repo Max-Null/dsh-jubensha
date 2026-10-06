@@ -21,7 +21,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RoomCase, RoomCaseRelation, RoomSnapshot } from '../room-types.ts'
-import { avatarSvg } from '../avatar.ts'
+import { avatarShape, avatarSvg } from '../avatar.ts'
 import { fillComposer } from './hidden-entry.ts'
 import { openingInstruction } from '../instruction.ts'
 import type { SaidLine } from './said.ts'
@@ -457,7 +457,11 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
                 : <Face id={seat} />}
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <b>{sitting?.name ?? role?.name ?? seat}</b>
+                {/* 名字用这个座位的色——与他的头像、他在中间那一栏的气泡同一个色。 */}
+                <b style={{
+                  padding: '0 6px', borderRadius: '5px',
+                  background: mine ? tintOf(seat, 0.24) : tintOf(seat, 0.18),
+                }}>{sitting?.name ?? role?.name ?? seat}</b>
                 {status === undefined
                   ? null
                   : <span style={{ fontSize: '10.5px', opacity: 0.75, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -625,7 +629,7 @@ function useRoomHeight(): { ref: (node: HTMLDivElement | null) => void, height: 
  * @param props - 快照、当前看哪一页、以及切换用的回调。
  * @returns 主区。
  */
-function MidColumn({
+function PhaseColumn({
   snapshot, phase, said, t,
 }: Locale & { snapshot: RoomSnapshot, phase: Phase, said: readonly SaidLine[] }) {
   const game = snapshot.game
@@ -870,7 +874,7 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
   }
 
   return <div style={{
-    // 同 `MidColumn`：`width: 100%` 与 `padding` 一起出现时必须有 `boxSizing`，否则多出的
+    // 同 `PhaseColumn`：`width: 100%` 与 `padding` 一起出现时必须有 `boxSizing`，否则多出的
     // padding 会把这一栏顶出轨道。
     maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px',
     boxSizing: 'border-box',
@@ -957,6 +961,30 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
  * @returns 消息流那一栏。
  */
 /**
+ * 一个座位的色相——**头像就是这么取的**（`avatarShape`），所以名字、气泡、头像三者同色，
+ * 一栏扫下来不用看字就知道哪几句是同一个人说的。
+ * @param seat - 座位 id。
+ * @returns 色相，0–359。
+ */
+function hueOf(seat: string): number {
+  return avatarShape(seat).hue
+}
+
+/**
+ * 一个座位的浅色底。
+ *
+ * **用半透明而不是固定的浅色**：`hsl(H 62% 48% / α)` 让底色自己透出来，于是浅色主题与暗色主题
+ * 共用一套值——写死一个 `hsl(H 60% 92%)` 在暗色主题下会亮得刺眼。α 由调用方给：名字那一条要
+ * 重一点（它是「谁在说」的锚），整块气泡淡得多（它是背景，不能盖过字）。
+ * @param seat - 座位 id。
+ * @param alpha - 不透明度，0–1。
+ * @returns 一个 CSS 颜色。
+ */
+function tintOf(seat: string, alpha: number): string {
+  return `hsl(${hueOf(seat)} 62% 48% / ${alpha})`
+}
+
+/**
  * 从 Team 的成员名（`p1-m3k8f2a`）里找出这个人演的角色叫什么。
  *
  * 成员名的前缀是座位 id（宿主的 `teammateName` 就是 `${seat}-<时间戳><随机>` 拼的），而那是分辨
@@ -976,14 +1004,17 @@ function seatName(
 }
 
 /**
- * 右栏：桌上说了什么。
- * @param props - 本地化文案、句子、开局了没有、以及座位到角色名的对照。
+ * 中间那一栏：桌上说了什么。
+ *
+ * **它在正中**——这一栏才是玩的时候一直盯着的地方，而阶段页与资料站两边（用户 2026-10-06 提的）。
+ * @param props - 本地化文案、句子、开局了没有、座位到角色名的对照、以及真人占的座位。
  * @returns 一栏发言。
  */
-function RightColumn({ t, said, started, seatNames }: Locale & {
+function SaidColumn({ t, said, started, seatNames, humanSeat }: Locale & {
   said: readonly SaidLine[]
   started: boolean
   seatNames: ReadonlyMap<string, string>
+  humanSeat: string
 }) {
   const lines = said.filter(isSaid)
   return <div style={{ padding: '14px 16px', boxSizing: 'border-box' }}>
@@ -996,28 +1027,42 @@ function RightColumn({ t, said, started, seatNames }: Locale & {
     {lines.length === 0
       ? <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>{t('right.empty')}</div>
       : <div style={{ marginBottom: '10px' }}>
-        {lines.map((line, index) => <div key={`${line.seq}-${index}`} style={{
-          padding: '5px 0',
-          borderBottom: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.16))',
-        }}>
-          <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '2px' }}>
-            {line.from === 'user'
-              ? t('right.you')
-              // 玩家有两条路进来：直接在座说的，与经 Team 的 send_message 发来的。
-              //
-              // Team 那条的信封里带着发信人，而它的前缀就是座位 id——**那就是这一栏原先缺的东西**：
-              // 只按 `kind` 显示，四个座位全糊成一句「玩家」（用户 2026-10-06 报的）。查得到角色名
-              // 就用角色名；查不到（那一场的人已经不在座上了）退回座位号，总比「玩家」有用。
-              : line.who !== undefined
-                ? seatName(line.who, seatNames) ?? line.who.split('-')[0] ?? t('right.player')
-                : line.from === 'agent-message' || line.from === 'team-message'
-                  ? t('right.player')
-                  : line.from}
+        {lines.map((line, index) => {
+          // 这一句是谁说的——决定它的底色。真人那些没有 Team 信封，所以按 `humanSeat` 上色；
+          // 认不出来的（注入、背景子代理）不上色，它们本来也不是桌上的发言。
+          const seat = line.who !== undefined
+            ? line.who.split('-')[0] ?? ''
+            : line.from === 'user' ? humanSeat : ''
+          const who = line.from === 'user'
+            ? t('right.you')
+            // 玩家有两条路进来：直接在座说的，与经 Team 的 send_message 发来的。
+            //
+            // Team 那条的信封里带着发信人，而它的前缀就是座位 id——**那就是这一栏原先缺的东西**：
+            // 只按 `kind` 显示，四个座位全糊成一句「玩家」（用户 2026-10-06 报的）。查得到角色名
+            // 就用角色名；查不到（那一场的人已经不在座上了）退回座位号，总比「玩家」有用。
+            : line.who !== undefined
+              ? seatName(line.who, seatNames) ?? line.who.split('-')[0] ?? t('right.player')
+              : line.from === 'agent-message' || line.from === 'team-message'
+                ? t('right.player')
+                : line.from
+          return <div key={`${line.seq}-${index}`} style={{
+            padding: '5px 9px', marginBottom: '5px', borderRadius: '8px',
+            // 整块淡底 + 左边一道实色——那道线是「这一句属于谁」最省字的说法，而它与头像同色。
+            background: seat === '' ? 'transparent' : tintOf(seat, 0.055),
+            borderLeft: seat === '' ? '2px solid transparent' : `2px solid ${tintOf(seat, 0.5)}`,
+          }}>
+            <div style={{ fontSize: '11px', marginBottom: '2px' }}>
+              <span style={{
+                padding: '1px 7px', borderRadius: '5px',
+                background: seat === '' ? 'transparent' : tintOf(seat, 0.2),
+                opacity: seat === '' ? 0.6 : 1,
+              }}>{who}</span>
+            </div>
+            <div style={{ fontSize: '12.5px', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {line.text}
+            </div>
           </div>
-          <div style={{ fontSize: '12.5px', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {line.text}
-          </div>
-        </div>)}
+        })}
       </div>}
     <div style={{ borderTop: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))', paddingTop: '10px' }}>
       <div style={{ fontSize: '11.5px', opacity: 0.65 }}>{t('right.composer')}</div>
@@ -1134,7 +1179,7 @@ export function RoomView({
       //
       // 两侧栏的 min 也要给：grid 会先让它们吃满各自的 `max`，中栏只能捡剩下的——1024 视口下
       // 中栏被压到一百多像素、文字竖着排。给它一个实在的下限（300），两侧才肯缩。
-      gridTemplateColumns: 'minmax(150px, 286px) minmax(300px, 1fr) minmax(190px, 366px)',
+      gridTemplateColumns: 'minmax(150px, 272px) minmax(320px, 1fr) minmax(210px, 392px)',
       // 吃根剩下的高度（根定的是 `calc(100vh - 118px)`）。`minHeight: 0` 是必需的：
       // flex 子项默认 `min-height: auto`，不给它就会被内容顶开、又变回「跟着内容长」。
       flex: 1,
@@ -1149,15 +1194,21 @@ export function RoomView({
         <LeftColumn snapshot={snapshot} t={t} />
       </div>
       <div style={{ minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
-        {snapshot.game === null
-          ? <OpenGame snapshot={snapshot} t={t} />
-          : <MidColumn snapshot={snapshot} phase={shown} said={said} t={t} />}
+        <SaidColumn
+          t={t}
+          said={said}
+          started={snapshot.game !== null}
+          seatNames={seatNames}
+          humanSeat={snapshot.game?.humanSeat ?? ''}
+        />
       </div>
       <div style={{
         minWidth: 0, minHeight: 0, overflowY: 'auto',
         borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',
       }}>
-        <RightColumn t={t} said={said} started={snapshot.game !== null} seatNames={seatNames} />
+        {snapshot.game === null
+          ? <OpenGame snapshot={snapshot} t={t} />
+          : <PhaseColumn snapshot={snapshot} phase={shown} said={said} t={t} />}
       </div>
     </div>
 

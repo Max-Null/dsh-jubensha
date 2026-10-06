@@ -44,8 +44,11 @@ describe('座位号的推导', () => {
     expect(text).toContain("line.from === 'user'")
   })
 
-  it('三处用它，都不再自己推导', () => {
+  it('用到它的地方都走 seatOf，不再自己推导', () => {
+    // **不写死条数**：第一版写的是「恰好 3 处」，而加自述页那处修好之后它立刻红了——
+    // 那条断言是错的。这一条真正要守的是「没有别的地方自己推导座位号」，
+    // 而那件事由上面那条「旧形状不许出现」负责；这里只确认它确实在被用。
     const uses = (text.match(/seatOf\(line,/gu) ?? []).length
-    expect(uses, '气泡底色、问话页分组、投票页统计——三处都该用它').toBe(3)
+    expect(uses, '气泡底色、问话页分组、投票页统计、自述页——至少这四处该用它').toBeGreaterThanOrEqual(4)
   })
 })

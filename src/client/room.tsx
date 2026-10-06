@@ -700,12 +700,18 @@ function PhaseColumn({
         // 照它判会把他显示成「还没上桌」，而他从一开始就坐在那儿（用户 2026-10-06 报的：
         // 「我还没机会自述，他们就先聊起来了」，而板子上写着「林默 还没上桌」）。
         const mine = seat === game?.humanSeat
+        // **而「轮到你」也不能一直挂着。** 第一版把它写成了无条件：真人那一支永远是「轮到你」，
+        // 于是他说完之后那句还留在那儿——他自己看得见的中栏里有他的发言，而这一栏说他还欠一个
+        // 自我介绍（用户 2026-10-06 报的：自述完了，右栏还写「陈曼 轮到你」）。
+        //
+        // 判据走 `seatOf`（真人那条路由它认），与右栏、问话页同一处推导。
+        const spoken = said.filter(isSaid).filter(line => seatOf(line, game?.humanSeat) === seat).length
         return <Card key={seat}>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
             <b>{role?.name ?? seat}</b>
             <span style={{ opacity: mine ? 0.85 : 0.6, fontSize: '11.5px' }}>
               {mine
-                ? t('intro.yourTurn')
+                ? spoken === 0 ? t('intro.yourTurn') : `${t('saidSoFar')} · ${role?.name ?? seat}`
                 : sitting === undefined ? t('left.notSeated') : `${t('saidSoFar')} · ${sitting.name}`}
             </span>
           </div>

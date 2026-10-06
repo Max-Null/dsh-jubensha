@@ -668,11 +668,17 @@ function PhaseColumn({
       ? (game?.seats ?? []).map(seat => {
         const sitting = snapshot.players.find(player => player.seat === seat)
         const role = caseEntry?.roles.find(one => one.id === seat)
+        // **真人那一位不适用 `players` 表**：那张表只装 spawn 过的 AI，真人从来不在里面——
+        // 照它判会把他显示成「还没上桌」，而他从一开始就坐在那儿（用户 2026-10-06 报的：
+        // 「我还没机会自述，他们就先聊起来了」，而板子上写着「林默 还没上桌」）。
+        const mine = seat === game?.humanSeat
         return <Card key={seat}>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
             <b>{role?.name ?? seat}</b>
-            <span style={{ opacity: 0.6, fontSize: '11.5px' }}>
-              {sitting === undefined ? t('left.notSeated') : `${t('saidSoFar')} · ${sitting.name}`}
+            <span style={{ opacity: mine ? 0.85 : 0.6, fontSize: '11.5px' }}>
+              {mine
+                ? t('intro.yourTurn')
+                : sitting === undefined ? t('left.notSeated') : `${t('saidSoFar')} · ${sitting.name}`}
             </span>
           </div>
         </Card>

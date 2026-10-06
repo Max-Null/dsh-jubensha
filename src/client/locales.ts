@@ -65,6 +65,7 @@ export const zh = {
   // 阶段页各自的抬头与引导
   'intro.title': '逐个上桌',
   'intro.lead': '每个玩家从「我昨晚的经历」开始说。主持人一个个请他们上桌。',
+  'intro.yourTurn': '轮到你——在下面那个输入框里说你自己昨晚的经历',
   'inquiry.title': '问话',
   'inquiry.silent': '还没出过声',
   'inquiry.spoke': '说过 {n} 段',
@@ -174,6 +175,7 @@ export const en = {
 
   'intro.title': 'Taking seats',
   'intro.lead': 'Each player starts with what they did last night. The host brings them to the table one by one.',
+  'intro.yourTurn': 'your turn — say what you did last night in the box below',
   'inquiry.title': 'Questions',
   'inquiry.silent': 'has not spoken yet',
   'inquiry.spoke': 'spoke {n} times',

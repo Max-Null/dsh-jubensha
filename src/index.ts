@@ -37,7 +37,7 @@ import type { NotePool } from './notes.ts'
 import { mountActorApi, mountCaseDirApi, mountNoteApi, mountRoomApi } from './room.ts'
 import type { RoomSnapshot } from './room.ts'
 import type { RoomTableRow } from './room-types.ts'
-import { advance, createGame, isFinished, isSealed, recordTimeline, revealClues } from './state.ts'
+import { PHASE_ORDER, advance, createGame, isFinished, isSealed, recordTimeline, revealClues } from './state.ts'
 import type { GameState, TimelineEntry } from './state.ts'
 
 /** 插件名。 */
@@ -868,6 +868,22 @@ export function apply(ctx: Context): void {
         case 'advance': {
           const before = games.get(sessionId)
           if (before === undefined) throw new Error(NO_GAME)
+          // **搜证阶段不能空着过去。**
+          //
+          // 那一页是玩家看物证的地方，而线索要 DM 主动发（`jubensha_case action="clue"`）——
+          // 实测里 DM 会一路推到投票，一件线索都没摆出来（2026-10-06 我在 dev 里从头玩了一局
+          // 才发现的：阶段条上「问话」「搜证」都点着，而桌上一条线索都没有）。
+          //
+          // 闸放在这里，因为它就是「要不要进下一阶段」那一次调用——**在做出决定的那一步执行**。
+          const next = PHASE_ORDER[PHASE_ORDER.indexOf(before.phase) + 1]
+          if (before.phase === 'search' && next === 'final' && before.revealedClues.length === 0) {
+            throw new Error(
+              '先别推：这一局一件线索都还没发（搜证那一页现在是空的，玩家什么都看不见）。\n'
+              + '本子里给了若干条线索，用 jubensha_case action="clue" 把它们摆到桌上——'
+              + '**一次给全**，别只给被怀疑的那个人相关的那几条（那等于替玩家判案）。'
+              + '发完再推阶段。',
+            )
+          }
           games.set(sessionId, advance(before))
           break
         }

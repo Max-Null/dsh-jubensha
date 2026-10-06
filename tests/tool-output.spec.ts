@@ -143,6 +143,47 @@ describe('工具的返回与它声明的输出', () => {
   })
 })
 
+describe('搜证那一页不能空着过去', () => {
+  const tools = registeredTools()
+
+  it('一件线索都没发时，不许从搜证推进到下一阶段', async () => {
+    // 这一条也是玩出来的：2026-10-06 我在 dev 里从头玩了一局，阶段条上「问话」「搜证」都点着，
+    // 而桌上一条线索都没有——DM 一路推到了投票。线索要 DM 主动发（jubensha_case action="clue"），
+    // 而它没有理由记得这件事。
+    const context = {
+      agent: { session: { header: { id: 'spec-session-clue' }, snapshotEvents: () => [] } },
+    }
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+    }, context)
+    /** 推一次阶段。 */
+    const push = async (): Promise<string> => {
+      try {
+        await state?.execute({ action: 'advance' }, context)
+        return ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    // 自述 → 问话 → 搜证：这两步不该被拦。
+    expect(await push()).toBe('')
+    expect(await push()).toBe('')
+    // 搜证 → 发言投票：一件线索都没有，该拦。
+    expect(await push()).toContain('一件线索都还没发')
+    // 发一条之后就放行。
+    //
+    // **注意这里是 `state action="reveal"` 而不是 `case action="clue"`**——那两件事不一样：
+    // `clue` 只把线索正文捞出来给 DM 贴到桌上，**它不动局面状态**；而搜证那一页读的是局面里的
+    // `revealedClues`。第一版测试写成了 `clue`，于是"发完还是被拦"——而那个错恰好复现了这一局
+    // 的真实缺陷：DM 拿到了正文、贴了，而局面里一条都没记。
+    const state2 = tools.find(one => one.name === 'jubensha_state')
+    await state2?.execute({ action: 'reveal', clues: ['c1'] }, context)
+    expect(await push()).toBe('')
+  })
+})
+
 describe('节奏闸：AI 不能自己一直玩下去', () => {
   const tools = registeredTools()
   const say = { action: 'say', seat: '*', message: '先说一遍你昨晚的经历' }
@@ -193,8 +234,7 @@ describe('节奏闸：AI 不能自己一直玩下去', () => {
     expect(await sayOnce(context)).toContain('桌上还没有 AI 玩家')
   })
 
-  it('转达也过闸——这一条是被实测逼出来的', async () => {
-    // 上一版只拦 `say`，理由是「拦 relay 等于掐断对话」。而实测（2026-10-06 用户报的第三局）：
+  it('转达也过闸——这一条是被实测逼出来的', async () => {    // 上一版只拦 `say`，理由是「拦 relay 等于掐断对话」。而实测（2026-10-06 用户报的第三局）：
     // `say` 两次（没到阈值）而 `relay` 转了十二次——六个来回，真人一句没说。
     // 转达十几轮而不叫他，与推三个阶段是同一个效果。
     const state = tools.find(one => one.name === 'jubensha_state')

@@ -22,6 +22,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RoomCase, RoomCaseRelation, RoomSnapshot } from '../room-types.ts'
 import { avatarSvg } from '../avatar.ts'
+import { fillComposer } from './hidden-entry.ts'
 import { openingInstruction } from '../instruction.ts'
 import type { SaidLine } from './said.ts'
 
@@ -719,6 +720,20 @@ function MidColumn({
           <b>{clue.title}{clue.dealt ? '' : ` ${t('mid.clueSealed')}`}</b>
         </div>
         <div style={{ fontSize: '12px', opacity: clue.dealt ? 0.85 : 0.5 }}>{clue.text}</div>
+        {/* 还没发到桌上的线索不给这个按钮：它不在桌上，拿着它去问是作弊。
+            引导语里那句「点『引用到对话』把它带进输入框」说的就是这个按钮（用户 2026-10-06
+            报的：那句话写着，而按钮不在）。 */}
+        {clue.dealt && clue.text !== ''
+          ? <button
+            type="button"
+            onClick={() => { fillComposer(`${clue.title}：\n${clue.text}`) }}
+            style={{
+              font: 'inherit', fontSize: '11.5px', padding: '2px 9px', borderRadius: '6px', cursor: 'pointer',
+              marginTop: '7px', border: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.4))',
+              background: 'transparent', color: 'inherit', opacity: 0.85,
+            }}
+          >{t('mid.quote')}</button>
+          : null}
       </Card>)
       : null}
 
@@ -907,16 +922,27 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
               </select>
             </div>)}
             {assignment.length > 0
-              ? <pre style={{
-                margin: '6px 0 0', padding: '6px 8px', maxHeight: '150px', overflow: 'auto',
-                background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.10))',
-                borderRadius: '8px', fontSize: '11px', lineHeight: 1.5,
-                // `pre-wrap` 只在空格处断行，而这段里最长的一行是个没有空格的 Windows 路径——
-                // 不 `break-all` 它就横着撑破中栏。`maxWidth` 是跟 `overflow: auto` 一起用的：
-                // 真遇到断不开的东西（比如一个超长英文单词）时给横向滚动，而不是让整页变宽。
-                whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxWidth: '100%',
-                boxSizing: 'border-box',
-              }}>{openingInstruction(one, assignment)}</pre>
+              ? <>
+                <button
+                  type="button"
+                  onClick={() => { fillComposer(openingInstruction(one, assignment)) }}
+                  style={{
+                    font: 'inherit', fontSize: '12px', padding: '3px 11px', borderRadius: '7px', cursor: 'pointer',
+                    border: '1px solid var(--dsw-accent, #4a7fd4)', marginBottom: '6px',
+                    background: 'var(--dsw-accent, #4a7fd4)', color: '#fff',
+                  }}
+                >{t('mid.start')}</button>
+                <pre style={{
+                  margin: '0', padding: '6px 8px', maxHeight: '150px', overflow: 'auto',
+                  background: 'var(--dsw-surface-sunken, rgba(127,127,127,0.10))',
+                  borderRadius: '8px', fontSize: '11px', lineHeight: 1.5,
+                  // `pre-wrap` 只在空格处断行，而这段里最长的一行是个没有空格的 Windows 路径——
+                  // 不 `break-all` 它就横着撑破中栏。`maxWidth` 是跟 `overflow: auto` 一起用的：
+                  // 真遇到断不开的东西（比如一个超长英文单词）时给横向滚动，而不是让整页变宽。
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxWidth: '100%',
+                  boxSizing: 'border-box',
+                }}>{openingInstruction(one, assignment)}</pre>
+              </>
               : null}
           </div>
           : null}

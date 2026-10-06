@@ -885,7 +885,17 @@ function OpenGame({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
     maxWidth: '640px', width: '100%', margin: '0 auto', padding: '14px 20px 40px',
     boxSizing: 'border-box',
   }}>
-    <h2 style={{ fontSize: '14px', margin: '0 0 4px', fontWeight: 600 }}>{t('mid.noGame')}</h2>
+    <h2 style={{ fontSize: '14px', margin: '0 0 4px', fontWeight: 600 }}>
+      {snapshot.preparing ? t('mid.preparingTitle') : t('mid.noGame')}
+    </h2>
+    {/* 「主持人正在准备」——点了开一局之后到局面出来之间那几十秒。
+        判据是宿主见过一次 `load`（见 `src/index.ts` 的 `isPreparing`）：**那段时间原先完全静默**，
+        房间页一直写着「还没开局」，看着像卡住（用户 2026-10-06 报的：加载期间最好有个提示）。 */}
+    {snapshot.preparing
+      ? <p style={{ opacity: 0.7, fontSize: '12px', margin: '0 0 14px', lineHeight: 1.6 }}>
+        {t('mid.preparingHint')}
+      </p>
+      : null}
     <Heading>{t('mid.cases')}</Heading>
     <div style={{ marginTop: '14px' }}>
       {cases.map(one => <div key={one.id} style={{ marginBottom: '8px' }}>

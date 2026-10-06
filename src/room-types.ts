@@ -193,6 +193,14 @@ export interface RoomNote {
 export interface RoomSnapshot {
   /** 当前这一局；还没开局时为 `null`。 */
   readonly game: RoomGame | null
+  /**
+   * 主持人正在准备开局。
+   *
+   * 只在 `game` 为 `null` 时有意义：它回答的是「我点了开一局，现在什么都没显示，是卡住了吗」。
+   * 判据是宿主见过 `jubensha_case action="load"`（见 `index.ts` 的 `isPreparing`），而它有
+   * 过期时间——一个死掉的标记比没有标记更坏。
+   */
+  readonly preparing: boolean
   /** 桌上的 AI 玩家。 */
   readonly players: readonly RoomPlayer[]
   /**

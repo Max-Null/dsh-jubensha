@@ -53,6 +53,8 @@ export const zh = {
   'mid.shuffleHint': '从演员池里随机挑，整桌重排',
   'mid.clueSealed': '（还没发到桌上）',
   'mid.noGame': '还没开局。在对话里让主持人开一局，这里就会显示局面。',
+  'mid.preparingTitle': '主持人正在准备这一局……',
+  'mid.preparingHint': '他刚把本子拿走了——读本、封存角色本、叫三位玩家上桌，要一两分钟。局面出来之前这里不会变。',
 
   // 右栏
   'right.said': '桌上说了什么',
@@ -166,6 +168,8 @@ export const en = {
   'mid.shuffleHint': 'pick at random from the actor pool, re-seating the whole table',
   'mid.clueSealed': '(not dealt yet)',
   'mid.noGame': 'No game yet. Ask the host in the conversation to start one, and the table shows up here.',
+  'mid.preparingTitle': 'The host is setting this game up…',
+  'mid.preparingHint': 'He just took the case file — reading it, sealing the role books, bringing three players to the table. That takes a minute or two, and nothing here changes until the table appears.',
 
   'right.said': 'What was said',
   'right.yourTurn': 'You can speak up any time — type in the box below, the AI players will pick it up.',

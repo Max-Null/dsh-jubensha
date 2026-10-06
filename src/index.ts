@@ -552,6 +552,36 @@ function snapshot(state: GameState) {
 let lastRoomHadGame: boolean | undefined
 
 /**
+ * 哪些会话的主持人正在准备开局。
+ *
+ * 用途只有一个：**让房间页在「点了开一局但局面还没出来」那几十秒里有话说**。原先那一段是静默
+ * 的——用户点了「开一局」、指令进了输入框、主持人开始读本子与叫玩家，而房间页一直显示「还没开局」，
+ * 看着像卡住（用户 2026-10-06 报的：加载期间最好有个提示）。
+ *
+ * **它只是个提示，不是状态。** 真值仍然是「`games` 里有没有这一局」——这里只记「`load` 被调过」。
+ * 所以它有过期时间：一个死掉的标记比没有标记更坏（会一直说「正在准备」而其实早就没在准备了）。
+ */
+const preparing = new Map<string, number>()
+
+/** 准备中这个标记多久算过期。读本子加叫玩家，十分钟绰绰有余。 */
+const PREPARING_TTL = 10 * 60 * 1000
+
+/**
+ * 这个会话是不是在准备开局。
+ * @param sessionId - 会话 id。
+ * @returns 在准备（且没过期）为 `true`。
+ */
+function isPreparing(sessionId: string): boolean {
+  const at = preparing.get(sessionId)
+  if (at === undefined) return false
+  if (Date.now() - at > PREPARING_TTL) {
+    preparing.delete(sessionId)
+    return false
+  }
+  return true
+}
+
+/**
  * 注册局面工具；监听器与注册项随 `ctx` 生命周期销毁。
  * @param ctx - 插件上下文。
  */
@@ -617,6 +647,8 @@ export function apply(ctx: Context): void {
       // **没开局就不算**：局面在内存里，而 teammate 是持久的——重启之后会出现「这一局没了、
       // 而那三位还在名册里」，那时候把状态摆出来只会让人以为局还开着。
       table: game === undefined ? [] : tableOf(ctx, sessionId),
+      // 「主持人正在准备」——只在没局时有意义（有局了它一定是过期的残留）。
+      preparing: game === undefined && isPreparing(sessionId),
       // 每次打开面板扫一次目录：频率低，而缓存要处理「用户刚加了一个本子」这种失效，
       // 收益不抵。四本本子的 YAML 解析是毫秒级的事。
       cases: [...listCases((await requireCaseDirs(ctx)).list())],
@@ -734,6 +766,8 @@ export function apply(ctx: Context): void {
             throw new Error('开局需要 caseId / title / seats / humanSeat 四项都给。')
           }
           games.set(sessionId, createGame({ caseId, title, seats, humanSeat }))
+          // 开局了，「正在准备」这个提示就撤掉——它是给「局面还没出来」那一段用的。
+          preparing.delete(sessionId)
           // 留痕。「工具把局面记到哪个会话下」与「标签查的是哪个会话」是两件事，它们对不上时
           // 症状是标签永远说「还没开局」——而那个症状从外面看与"没开局"一模一样。
           // 这一行与下面端点那一行是唯一能把两者对上号的地方（同 `loaded · registers` 的理由）。
@@ -954,6 +988,8 @@ export function apply(ctx: Context): void {
       const loaded = loadCase(source)
       const issues = loaded.issues.map(issue => ({ level: issue.level, message: issue.message }))
       const action = args.action ?? 'load'
+      // 读本子这件事本身就是「主持人开始准备了」——房间页那几十秒里靠这个标记才有话说。
+      if (action === 'load') preparing.set(sessionId, Date.now())
 
       if (action === 'load') {
         return Promise.resolve({

@@ -26,6 +26,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { openActorPool } from './actor.ts'
 import type { Actor, ActorPool } from './actor.ts'
 import { DM_HANDBOOK } from './dm-handbook.ts'
+import { CASE_HANDBOOK } from './case-handbook.ts'
 import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, sceneTruth, sceneVictim, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
@@ -680,6 +681,23 @@ export function apply(ctx: Context): void {
       source: 'runtime',
       content: DM_HANDBOOK,
     }), 'jubensha: dm handbook skill')
+    // **写一本**——同一件事的另一半。
+    //
+    // 为什么它是一条 skill 而不是仓库里的一份文档：写本子的知识属于本子，用户装了插件就该拿到它；
+    // 而写本子的**可能不是这个仓库里的模型**（是用户自己、或者另一个会话）。
+    //
+    // 它不装「字段怎么填」——那有两个更好的地方了（`schema/case.schema.yml` 的字段注释、
+    // `scripts/check-case-syntax.mjs` 的两条 YAML 坑）。它装的是**机械检查抓不到的那些**：
+    // 七个本子里真踩过的逻辑坑，以及「怎么想一个本子」。
+    ctx.effect(() => skills.register({
+      name: 'jubensha-write-case',
+      description: '写一本新的剧本杀之前读它——五条真踩过的坑（收尾缺物证、动机链经不起'
+        + '「为什么」、本子没给来源 AI 会自己补、时刻字段要对着原话写、一个动作是两步要写两步）、'
+        + '怎么想一个本子的真相与情感落点、以及四人与六人的差别。',
+      whenToUse: '你要写一个新的剧本杀本子、或者要改现有本子里的一段剧情的时候。',
+      source: 'runtime',
+      content: CASE_HANDBOOK,
+    }), 'jubensha: case handbook skill')
   }
   // 房间标签读的那一份快照。**只读**——开一局、推进阶段、发线索都在对话里说，
   // 它不发号施令（设计方案里「界面是附加层」那条约束）。

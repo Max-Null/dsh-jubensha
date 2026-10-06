@@ -530,9 +530,32 @@ function LeftColumn({ snapshot, t }: Locale & { snapshot: RoomSnapshot }) {
 
     <section>
       <Heading>{t('left.timeline')}</Heading>
-      {/* 时间线要按座位把每个人说过的时段收集起来，那是一份新数据（界面设计 §5 第 2 条）。
-          现在明说它还没接，而不是画一个空的时间线让人以为没人交代过。 */}
-      <div style={{ fontSize: '12px', opacity: 0.6 }}>{t('left.nothingSaid')}</div>
+      {(() => {
+        const rows = [...(game?.timeline ?? [])].sort((left, right) =>
+          left.at.localeCompare(right.at, 'en'))
+        // 还没交代的人：这一栏真正有用的地方是它——谁回避了自己那段时间，一眼看得出来。
+        const silent = seats.filter(seat => !rows.some(one => one.seat === seat))
+        if (rows.length === 0) {
+          return <div style={{ fontSize: '12px', opacity: 0.6 }}>{t('left.nothingSaid')}</div>
+        }
+        return <>
+          {rows.map((one, index) => <div key={`${one.at}-${one.seat}-${index}`} style={{
+            display: 'flex', gap: '7px', alignItems: 'baseline', padding: '3px 0',
+            borderTop: index === 0 ? 'none' : '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.14))',
+          }}>
+            <span style={{ fontSize: '11px', opacity: 0.65, flexShrink: 0, minWidth: '38px' }}>{one.at}</span>
+            <span style={{ fontSize: '11.5px', fontWeight: 500, flexShrink: 0, minWidth: '42px' }}>
+              {roleOf(one.seat)?.name ?? one.seat}
+            </span>
+            <span style={{ fontSize: '11.5px', opacity: 0.85, lineHeight: 1.5 }}>{one.doing}</span>
+          </div>)}
+          {silent.length === 0
+            ? null
+            : <div style={{ fontSize: '11px', opacity: 0.55, marginTop: '6px' }}>
+              {t('left.timelineSilent')}　{silent.map(seat => roleOf(seat)?.name ?? seat).join('、')}
+            </div>}
+        </>
+      })()}
     </section>
   </div>
 }

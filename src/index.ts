@@ -36,8 +36,8 @@ import type { NotePool } from './notes.ts'
 import { mountActorApi, mountCaseDirApi, mountNoteApi, mountRoomApi } from './room.ts'
 import type { RoomSnapshot } from './room.ts'
 import type { RoomTableRow } from './room-types.ts'
-import { advance, createGame, isFinished, isSealed, revealClues } from './state.ts'
-import type { GameState } from './state.ts'
+import { advance, createGame, isFinished, isSealed, recordTimeline, revealClues } from './state.ts'
+import type { GameState, TimelineEntry } from './state.ts'
 
 /** 插件名。 */
 export const name = 'dsh-jubensha'
@@ -541,6 +541,8 @@ function snapshot(state: GameState) {
     ...state,
     seats: [...state.seats],
     revealedClues: [...state.revealedClues],
+    // 摊平成可变数组：工具的输出 schema 要的是普通数组，而局面里这份是 `readonly` 的。
+    timeline: state.timeline.map(one => ({ ...one })),
     log: [...state.log],
     finished: isFinished(state),
   }
@@ -594,6 +596,7 @@ export function apply(ctx: Context): void {
         phase: game.phase,
         round: game.round,
         revealedClues: [...game.revealedClues],
+        timeline: game.timeline.map(one => ({ ...one })),
         finished: isFinished(game),
         victim: loaded === undefined ? null : sceneVictim(loaded),
         // `tableClues(loaded, [])` 给本子的全部线索——它是线索的**唯一出口**，`supports`
@@ -642,8 +645,8 @@ export function apply(ctx: Context): void {
     parameters: {
       action: {
         type: 'string',
-        enum: ['show', 'start', 'advance', 'reveal'],
-        description: 'show = 查看当前局面（默认）；start = 开一局；advance = 推进到下一阶段（**推进之前先确认真人在这一阶段说过话**——他一言未发就往下走，这一局就变成 AI 自己演给自己看了）；reveal = 公布线索到桌上。',
+        enum: ['show', 'start', 'advance', 'reveal', 'timeline'],
+        description: 'show = 查看当前局面（默认）；start = 开一局；advance = 推进到下一阶段（**推进之前先确认真人在这一阶段说过话**——他一言未发就往下走，这一局就变成 AI 自己演给自己看了）；reveal = 公布线索到桌上；timeline = 把刚听出来的「谁在几点说他在哪儿」记下来（房间页左栏那一栏读它）。',
       },
       caseId: { type: 'string', description: 'start 用：本子编号，如 "01"。' },
       title: { type: 'string', description: 'start 用：本子名，如「拾光照相馆」。' },
@@ -653,6 +656,19 @@ export function apply(ctx: Context): void {
         description: 'start 用：桌上的位子（角色 id），按发言顺序。',
       },
       humanSeat: { type: 'string', description: 'start 用：真人占的角色 id。' },
+      entries: {
+        type: 'array',
+        description: 'timeline 用：这一次听出来的几条行踪。',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            at: { type: 'string', description: '时刻，**24 小时制**（`"22:41"`）。中文钟点排不了序，所以「十点二十」要转成 `"22:20"` 再记。' },
+            seat: { type: 'string', description: '谁交代的（座位 id，如 `p2`）。' },
+            doing: { type: 'string', description: '他在那一刻在哪儿、做什么——照他说的记，别替他补。' },
+          },
+        },
+      },
       clues: {
         type: 'array',
         items: { type: 'string' },
@@ -674,6 +690,18 @@ export function apply(ctx: Context): void {
           phase: { type: 'string' },
           round: { type: 'integer' },
           revealedClues: { type: 'array', items: { type: 'string' } },
+          timeline: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                at: { type: 'string' },
+                seat: { type: 'string' },
+                doing: { type: 'string' },
+              },
+            },
+          },
           log: {
             type: 'array',
             items: {
@@ -722,6 +750,25 @@ export function apply(ctx: Context): void {
           const before = games.get(sessionId)
           if (before === undefined) throw new Error(NO_GAME)
           games.set(sessionId, revealClues(before, args.clues ?? []))
+          break
+        }
+        case 'timeline': {
+          // 这一条不是「谁说了几句」，而是「谁在几点说他在哪儿」——那是**读正文的语义**，
+          // 前端没有模型也不该去猜（界面设计 §6：「放错了层」）。所以由 DM 听出来记在这里，
+          // 房间页那一栏才有东西可显示。
+          const before = games.get(sessionId)
+          if (before === undefined) throw new Error(NO_GAME)
+          const entries: TimelineEntry[] = []
+          for (const one of args.entries ?? []) {
+            const at = (one.at ?? '').trim()
+            const doing = (one.doing ?? '').trim()
+            const seat = one.seat ?? ''
+            // 缺哪一样这条就没法用：没有时刻排不了序，没有交代则它什么也不说明；
+            // 而座位不在桌上多半是 DM 写错了角色的名字。
+            if (at === '' || doing === '' || !before.seats.includes(seat)) continue
+            entries.push({ at, seat, doing })
+          }
+          games.set(sessionId, recordTimeline(before, entries))
           break
         }
         case 'show':

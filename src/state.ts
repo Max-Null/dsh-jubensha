@@ -47,6 +47,27 @@ export interface StartInput {
   humanSeat: string
 }
 
+/**
+ * 一个人在某个时刻交代的「我在哪儿、做什么」。
+ *
+ * **它是 DM 听出来的，不是前端猜的。** 前端没有模型，而"他说的哪句是在交代行踪"是读正文的
+ * 语义——猜出来的时间线比空着更坏。所以这条数据由 DM 经 `jubensha_state action="timeline"` 记下
+ * （见界面设计 §6 那条「放错了层」）。
+ */
+export interface TimelineEntry {
+  /**
+   * 时刻，**24 小时制**（`"22:41"`）。
+   *
+   * 要求写数字钟点而不要「十点二十」：这一栏是按时间排的，而中文钟点排不了序。转换属于 DM
+   * 该做的判断，前端不做归一化。
+   */
+  readonly at: string
+  /** 谁交代的（座位 id）。 */
+  readonly seat: string
+  /** 他在那一刻在哪儿、做什么——照他说的记，别替他补。 */
+  readonly doing: string
+}
+
 /** 一局的局面。 */
 export interface GameState {
   /** 本子编号。 */
@@ -63,6 +84,8 @@ export interface GameState {
   readonly round: number
   /** 已经发到桌上的线索 id。 */
   readonly revealedClues: readonly string[]
+  /** 谁在几点说他在哪儿。按 `at` 排序由渲染方做。 */
+  readonly timeline: readonly TimelineEntry[]
   /** 事件日志，复盘读它。 */
   readonly log: readonly LogEntry[]
 }
@@ -87,8 +110,32 @@ export function createGame(input: StartInput): GameState {
     phase,
     round: 1,
     revealedClues: [],
+    timeline: [],
     log: append([], phase, 'phase-enter', phase),
   }
+}
+
+/**
+ * 记下几条「谁在几点说他在哪儿」。
+ *
+ * **同一个座位在同一时刻只留一条**：他改口的时候该覆盖掉前一条，而不是两条并排摆着让人以为
+ * 桌上出现了两个版本（真要留版本，那是复盘时该说的事，不是这一栏）。同一次调用里重复的也按
+ * 后写的算。
+ *
+ * 记进来的东西**不进日志**：日志是「阶段与线索」的账，这一栏是「他们说的话」的索引，两件事
+ * 各自有主，混在一起会让复盘读日志时看见一堆不是事件的行。
+ * @param state - 当前局面。
+ * @param entries - 这一次听出来的几条（可为空，空调用是空操作）。
+ * @returns 记好之后的新局面。
+ */
+export function recordTimeline(
+  state: GameState,
+  entries: readonly TimelineEntry[],
+): GameState {
+  if (entries.length === 0) return state
+  const merged = new Map(state.timeline.map(one => [`${one.seat}@${one.at}`, one]))
+  for (const one of entries) merged.set(`${one.seat}@${one.at}`, one)
+  return { ...state, timeline: [...merged.values()] }
 }
 
 /**

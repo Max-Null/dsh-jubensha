@@ -56,6 +56,8 @@ export interface RoomGame {
   readonly round: number
   /** 已经发到桌上的线索 id。 */
   readonly revealedClues: readonly string[]
+  /** 谁在几点说他在哪儿——DM 听出来的（见 `state.ts` 的 `TimelineEntry`）。 */
+  readonly timeline: readonly { at: string, seat: string, doing: string }[]
   /** 是不是已经到复盘了。 */
   readonly finished: boolean
   /** 死者；本子没写全时为 `null`。 */

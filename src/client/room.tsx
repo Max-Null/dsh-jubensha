@@ -54,6 +54,34 @@ function isSaid(line: SaidLine): boolean {
   return !NOT_SPOKEN.has(line.from) && !line.from.startsWith('plugin:')
 }
 
+/**
+ * 这一句是谁说的——**座位号的唯一推导处**。
+ *
+ * 这个函数是被一次真事逼出来的：原先「这一句是谁说的」在三处各写了一遍（气泡底色、问话页
+ * 分组、投票页统计），而其中两遍是这样的——
+ *
+ * ```ts
+ * const seat = line.who === undefined ? null : line.who.split('-')[0] ?? null
+ * if (seat === null) continue
+ * ```
+ *
+ * **它把真人整个跳过了。** 真人的发言没有 Team 信封，所以 `who` 是 `undefined`——于是那两处
+ * 把他认成「入不了座位的发言」而丢掉。症状：问话页显示「林默 还没出过声」，而他明明说了两段
+ * （用户 2026-10-06 报的）。
+ *
+ * **这是同一个 gap 的第四次浮现**：`players` 那张表里从来没有真人（他是人，不是我们 spawn 的
+ * teammate），而每个直接遍历它的读者都会漏掉他。前三次是：DM 自己把局跑完、真人头像渲染成
+ * 灰块、自述页写「还没上桌」。所以修法不是在每个读者那里补一句，而是**只留一个推导处**。
+ *
+ * @param line - 桌上的一句话。
+ * @param humanSeat - 真人的座位号（局面里的 `humanSeat`）；没有局面时传 `undefined`。
+ * @returns 座位号；认不出来（注入、背景子代理）时是空串。
+ */
+function seatOf(line: SaidLine, humanSeat: string | undefined): string {
+  if (line.who !== undefined) return line.who.split('-')[0] ?? ''
+  return line.from === 'user' ? (humanSeat ?? '') : ''
+}
+
 type Locale = PropsLocale<'jubensha'>
 
 /** 五个阶段，按顺序。 */
@@ -692,8 +720,8 @@ function PhaseColumn({
         // 折叠，summary 给条数与第一句——想追的时候展开，不想追的时候它不占地方。
         const bySeat = new Map<string, string[]>()
         for (const line of said.filter(isSaid)) {
-          const seat = line.who === undefined ? null : line.who.split('-')[0] ?? null
-          if (seat === null) continue
+          const seat = seatOf(line, game?.humanSeat)
+          if (seat === '') continue
           const list = bySeat.get(seat) ?? []
           list.push(line.text)
           bySeat.set(seat, list)
@@ -754,8 +782,8 @@ function PhaseColumn({
         // 投票阶段最要紧的信息就是这个——不然玩家不知道该等谁、也不知道自己漏听了谁。
         const latest = new Map<string, string>()
         for (const line of said.filter(isSaid)) {
-          const seat = line.who === undefined ? null : line.who.split('-')[0] ?? null
-          if (seat !== null) latest.set(seat, line.text)
+          const seat = seatOf(line, game?.humanSeat)
+          if (seat !== '') latest.set(seat, line.text)
         }
         return (game?.seats ?? []).map(seat => {
           const role = caseEntry?.roles.find(one => one.id === seat)
@@ -1061,9 +1089,7 @@ function SaidColumn({ t, said, started, seatNames, humanSeat }: Locale & {
         {lines.map((line, index) => {
           // 这一句是谁说的——决定它的底色。真人那些没有 Team 信封，所以按 `humanSeat` 上色；
           // 认不出来的（注入、背景子代理）不上色，它们本来也不是桌上的发言。
-          const seat = line.who !== undefined
-            ? line.who.split('-')[0] ?? ''
-            : line.from === 'user' ? humanSeat : ''
+          const seat = seatOf(line, humanSeat)
           const who = line.from === 'user'
             ? t('right.you')
             // 玩家有两条路进来：直接在座说的，与经 Team 的 send_message 发来的。

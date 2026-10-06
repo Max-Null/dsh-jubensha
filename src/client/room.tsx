@@ -675,7 +675,39 @@ function MidColumn({
       : null}
 
     {phase === 'inquiry'
-      ? <Card><div style={{ fontSize: '12.5px', opacity: 0.75 }}>{t('mid.pending')}</div></Card>
+      ? (() => {
+        // 资料与投票页同源（右栏那套投影），而**这一页要的是全部**而不是最近一段：问话阶段读的
+        // 是「他有没有改口、有没有漏掉自己那段时间」，那要全文。而一个人可能说几千字，所以按人
+        // 折叠，summary 给条数与第一句——想追的时候展开，不想追的时候它不占地方。
+        const bySeat = new Map<string, string[]>()
+        for (const line of said.filter(isSaid)) {
+          const seat = line.who === undefined ? null : line.who.split('-')[0] ?? null
+          if (seat === null) continue
+          const list = bySeat.get(seat) ?? []
+          list.push(line.text)
+          bySeat.set(seat, list)
+        }
+        return (game?.seats ?? []).map(seat => {
+          const role = caseEntry?.roles.find(one => one.id === seat)
+          const lines = bySeat.get(seat) ?? []
+          return <Card key={seat}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', marginBottom: '4px' }}>
+              <b>{role?.name ?? seat}</b>
+              <span style={{ fontSize: '11.5px', opacity: 0.55 }}>
+                {lines.length === 0 ? t('inquiry.silent') : t('inquiry.spoke', { n: lines.length })}
+              </span>
+            </div>
+            {lines.map((text, index) => <details key={index} style={{ marginTop: index === 0 ? 0 : '3px' }}>
+              <summary style={{ cursor: 'pointer', fontSize: '11.5px', opacity: 0.7, lineHeight: 1.6 }}>
+                {text.slice(0, 42)}{text.length > 42 ? '…' : ''}
+              </summary>
+              <div style={{ fontSize: '12px', opacity: 0.85, lineHeight: 1.7, padding: '4px 0 4px 10px', whiteSpace: 'pre-wrap' }}>
+                {text}
+              </div>
+            </details>)}
+          </Card>
+        })
+      })()
       : null}
 
     {phase === 'search'

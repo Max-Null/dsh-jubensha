@@ -257,6 +257,35 @@ describe('搜证那一页不能空着过去', () => {
   })
 })
 
+describe('桌上说话不用主持人转达', () => {
+  const tools = registeredTools()
+
+  it('主持人用 say 转达玩家的原话时，会被拦下来', async () => {
+    // 实测（2026-10-07）：广播上线之后，指令里只说了「不用 relay」，而它一直用 say 转达
+    // （「【主持人转达·某某的原话】」）——同一件事的另一种写法，于是桌上会把这句看见两遍。
+    const context = {
+      agent: { session: { header: { id: 'spec-session-relay-say' }, snapshotEvents: () => [] } },
+    }
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({ action: 'start', caseId: '01', title: '拾光照相馆', seats: ['p0'], humanSeat: 'p0' }, context)
+    const player = tools.find(one => one.name === 'jubensha_player')
+    /** 试着说一句。 */
+    const say = async (message: string): Promise<string> => {
+      try {
+        await player?.execute({ action: 'say', seat: '*', message }, context)
+        return ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    // 转达的写法绕不开这几个字眼——它们会被拦。
+    expect(await say('【主持人转达·林默的原话】「我 21:45 走的」')).toContain('先别转达')
+    expect(await say('转达·阿May：她说她九点前就走了')).toContain('先别转达')
+    // 而主持人自己说话不会被误伤（那才是它的嘴该干的）。
+    expect(await say('武斌，你还没答我——22:00 那十几分钟你在哪儿？')).not.toContain('先别转达')
+  })
+})
+
 describe('人齐了才开场', () => {
   const tools = registeredTools()
 

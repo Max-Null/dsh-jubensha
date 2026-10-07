@@ -1476,6 +1476,22 @@ export function apply(ctx: Context): void {
           if (seat === undefined || message === undefined) throw new Error('say 需要 seat 与 message 两项都给。')
           const dm = exec.agent
           if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
+          // **别用 `say` 转达——桌上会看见两遍。**
+          //
+          // 广播（`broadcast.ts`）已经把真人与玩家说的每一句话原样送到桌上了，而这里是
+          // **主持人的嘴**：转场、提问、宣布。实测（2026-10-07）：指令里只说了「不用 relay」，
+          // 而它一直用 `say` 转达（「【主持人转达·某某的原话】」）——同一件事的另一种写法，
+          // 于是那一局桌上可能同时收到两份。
+          //
+          // 判据是那几个字眼：转达的写法绕不开它们，而主持人自己说话不会这么开头。
+          if (/主持人转达|转达·|的原话】|原话\s*[：:]/u.test(message)) {
+            throw new Error(
+              '先别转达：**桌上说话现在由程序自动广播**，你转一遍他们就会看见两遍'
+              + '（一遍是你转的、一遍是程序送的）。\n'
+              + '你要说的话直接说——转场、提问、催某个人回答，那些才是你的嘴该干的。'
+              + '玩家说了什么，桌上自己听得见。',
+            )
+          }
           checkSeated(session)
           checkPace(session, dm)
           // seat="*" 是说给全桌听：桌上每个人都该听见，一条命令发出去，程序保证一个都不漏。

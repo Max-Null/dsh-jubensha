@@ -371,6 +371,20 @@ describe('桌上转太久了，该把话头交给真人', () => {
     expect(await poke()).toBe('')
   })
 
+  it('基准从开局那一刻起算——不必先空跑一次', async () => {
+    // 实测（2026-10-07 晚）：基准原先记在「主持人第一次调插件工具」那一刻，而那时桌上可能已经
+    // 聊了几十条——用户看到的是「182 才让用户有参与感，平均每个人都说了 30 多句话了」。
+    // 现在 `start` 就把它定成 0，所以桌上说到第 8 条时第一次拦就来了。
+    const { context } = dmContext('spec-session-table-pace-from-start', 8, 0)
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({ action: 'start', caseId: '01', title: '拾光照相馆', seats: ['p0', 'p1'], humanSeat: 'p0' }, context)
+    // 开局之后**直接**调一次——中间没有「空跑记基准」那一步。
+    const blocked = await preExecute('jubensha_state', context.agent)
+    expect(blocked).toContain('先停一下')
+    // 而理由里要写清「光停下不算」——那是上一版漏掉的一半。
+    expect(blocked).toContain('只做第 2 件是不够的')
+  })
+
   it('真人说过话之后，桌上重新计时', async () => {
     // 真人说完之后基准跟着走——所以接下来这十几条不该立刻又被拦。
     const { context, grow } = dmContext('spec-session-table-pace-human', 11, 1)

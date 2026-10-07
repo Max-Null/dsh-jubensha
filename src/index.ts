@@ -907,6 +907,21 @@ export function apply(ctx: Context): void {
           if (caseId === undefined || title === undefined || seats === undefined || humanSeat === undefined) {
             throw new Error('开局需要 caseId / title / seats / humanSeat 四项都给。')
           }
+          // **一局只能开一次——重复开局会把正在上桌的人丢在原地。**
+          //
+          // 实测（2026-10-07）：同一个会话里 `start` 被调了三次（07 → 01 → 07），而每一次都
+          // **重置局面**：已经 spawn 的玩家还在 Team 名册里（那不可移除），而座位表被清空了——
+          // 于是下一次 spawn 撞「座位上已经有人了」，而房间里看起来像什么也没发生过。
+          // 那一次是我自己造的（同一会话里点了两次「开一局」），而**闸不该依赖调用者自觉**。
+          const existing = games.get(sessionId)
+          if (existing !== undefined) {
+            throw new Error(
+              `这个会话里已经有一局了（${existing.title} · 座位 ${existing.seats.join('/')}）。\n`
+              + '**重开一局要换会话**——Team 名册里的成员不可移除，同一个会话里再开一局，'
+              + '上一局的人还会占着那些座位（`spawn` 会报「座位上已经有人了」）。\n'
+              + '想接着打就继续；想换本子请**新开一个会话**再点「开一局」。',
+            )
+          }
           games.set(sessionId, createGame({ caseId, title, seats, humanSeat }))
           // 开局了，「正在准备」这个提示就撤掉——它是给「局面还没出来」那一段用的。
           preparing.delete(sessionId)
@@ -914,18 +929,20 @@ export function apply(ctx: Context): void {
           // 不再经主持人手打转达（见 `broadcast.ts` 与设计文档 §3）。
           broadcaster?.watch(sessionId, async (line) => {
             const current = games.get(sessionId)
-            if (current === undefined) return
+            if (current === undefined) return 0
             const agents = ctx.get('agents')
             const lead = agents?.get(SessionId(sessionId)) as Agent | undefined
-            if (lead === undefined) return
+            if (lead === undefined) return 0
             // 说话的那位不用收自己那句。
             const listeners = players.list().filter(one => one.seat !== line.seat)
-            if (listeners.length === 0) return
+            if (listeners.length === 0) return 0
             // 署名要准：AI 玩家用角色名，真人用他那个座位的名字（座位号只有桌上的人看得懂）。
             const speaker = line.seat === ''
               ? (current.humanSeat === undefined ? '真人' : `真人 ${current.humanSeat}`)
               : (players.list().find(one => one.seat === line.seat)?.name ?? line.seat)
             await deliver(ctx, lead, listeners, `（${speaker}）${line.text}`, new AbortController().signal)
+            // 送给几位——广播器拿它打日志（桌上没人时不该报「广播了」）。
+            return listeners.length
           })
           // 留痕。「工具把局面记到哪个会话下」与「标签查的是哪个会话」是两件事，它们对不上时
           // 症状是标签永远说「还没开局」——而那个症状从外面看与"没开局"一模一样。

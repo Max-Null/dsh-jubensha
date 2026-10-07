@@ -111,9 +111,10 @@ export interface Broadcaster {
   /**
    * 让一个会话开始被广播。
    * @param sessionId - 会话 id（也就是局面的键）。
-   * @param say - 把一句话送给桌上其他人；由调用方决定「其他人」是谁。
+   * @param say - 把一句话送给桌上其他人；**返回送给几个人**（0 表示桌上没有别人）。
+   *   那个数用来打日志——第一版 sink 不给回执，于是桌上一个人都没有时也报「广播到桌上其余人」。
    */
-  watch(sessionId: string, say: (line: HeardLine) => Promise<void>): void
+  watch(sessionId: string, say: (line: HeardLine) => Promise<number>): void
   /** 停止广播一个会话（散场、或者局面没了）。 */
   unwatch(sessionId: string): void
 }
@@ -131,7 +132,7 @@ export function createBroadcaster(ctx: Context): Broadcaster {
   /** 会话 → 上次读到哪个 seq。 */
   const cursors = new Map<string, number>()
   /** 会话 → 送话的那条路。 */
-  const sinks = new Map<string, (line: HeardLine) => Promise<void>>()
+  const sinks = new Map<string, (line: HeardLine) => Promise<number>>()
   /** 正在跑的那一轮——防止两秒内的两次 tick 叠在一起。 */
   let running = false
 
@@ -141,7 +142,11 @@ export function createBroadcaster(ctx: Context): Broadcaster {
     running = true
     try {
       const agents = ctx.get('agents')
-      if (agents === undefined) return
+      if (agents === undefined) {
+        // 拿不到 agent 注册表——那意味着一个字也送不出去，而它不该是静默的。
+        console.warn('[jubensha] 广播器读不到 agents 服务，桌上说话的广播这一轮没跑')
+        return
+      }
       for (const [sessionId, sink] of sinks) {
         const lead = agents.get(SessionId(sessionId)) as Agent | undefined
         if (lead === undefined) continue
@@ -149,14 +154,41 @@ export function createBroadcaster(ctx: Context): Broadcaster {
         let events: readonly { type: string, seq: number, data?: unknown }[]
         try {
           events = lead.session.snapshotEvents(SessionLogOffset(from)) as unknown as readonly { type: string, seq: number, data?: unknown }[]
-        } catch {
-          // 读不到就下一轮再试——一个会话读失败不该拖住别的会话。
+        } catch (error: unknown) {
+          // 读不到就下一轮再试——一个会话读失败不该拖住别的会话。而同样要留痕。
+          console.warn(`[jubensha] 广播器读不到 ${sessionId} 的增量（from=${String(from)}）：`
+            + (error instanceof Error ? error.message : String(error)))
           continue
+        }
+        // 一段一段看清：读到了多少事件、其中多少条是桌上的发言。
+        //
+        // 这一行是**诊断**而不是叙事：第一版这里什么都没有，于是「广播一条没送」与「桌上没人
+        // 说话」在外部完全一样（2026-10-07 实测栽在这里）。只在**读到东西**时打，所以平时安静。
+        if (events.length > 0) {
+          const lines = events.flatMap(event => tableLinesOf(event))
+          const kinds = [...new Set(events.map(event => event.type))].join('、')
+          console.info(`[jubensha] 广播器读到 ${String(events.length)} 条事件（${kinds}）、`
+            + `桌上发言 ${String(lines.length)} 条`)
         }
         for (const event of events) {
           for (const line of tableLinesOf(event)) {
             // 送不出去不能让整轮停住：桌上少听见一句，比广播器整个哑掉轻。
-            try { await sink(line) } catch { /* 见上 */ }
+            //
+            // **但必须留痕。** 第一版这里是空 catch——于是「广播一条都没送出去」在外部看起来
+            // 与「桌上没人说话」一模一样（2026-10-07 实测：一整局下来玩家会话里一条广播都没有，
+            // 而我只能靠翻会话才知道）。静默失败与静默跳过长得一样，那是这一路反复踩的坑。
+            try {
+              const delivered = await sink(line)
+              // 送出成功的痕迹也留一行——**但只在真送出时**（每 2 秒一行会把这日志淹掉），
+              // 而**人数要准**：桌上一个人都没有就不该报「广播了」。
+              if (delivered > 0) {
+                console.info(`[jubensha] 广播 ${line.seat === '' ? '真人' : line.seat} 的一句`
+                  + `（${String(line.text.length)} 字）给 ${String(delivered)} 位`)
+              }
+            } catch (error: unknown) {
+              console.warn(`[jubensha] 广播失败（${sessionId} · ${line.seat === '' ? '真人' : line.seat}）：`
+                + (error instanceof Error ? error.message : String(error)))
+            }
           }
         }
         // 游标推到这一批的末尾——`snapshotEvents` 给的是 [from, seq)，所以末条的 seq + 1。

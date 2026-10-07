@@ -113,11 +113,25 @@ describe('工具的返回与它声明的输出', () => {
    * `game === undefined ? {} : {…}` 展开的，没开局时那两个键压根不在返回里——而事故恰恰发生在
    * 开局之后（DM 先 `start` 再 `spawn`，然后每一条都撞在同一道校验上）。
    */
-  async function startGame(): Promise<void> {
+  async function startGame(): Promise<{ agent: { session: unknown } }> {
+    // **每次用一个新的会话 id**，并把那个上下文还回去。
+    //
+    // 「一个会话只能开一局」是 2026-10-07 加的闸（重复开局会重置局面、把已经上桌的人丢在原地），
+    // 而这一组里好几个测试各自开一局——它们不该撞在同一个会话上；而调用方也必须拿**同一个**
+    // 会话去调后面的工具（局面按会话存）。
+    const context = {
+      agent: {
+        session: {
+          header: { id: `spec-session-${String(Math.random()).slice(2, 10)}` },
+          snapshotEvents: () => [],
+        },
+      },
+    }
     await tools.find(one => one.name === 'jubensha_state')?.execute({
       action: 'start', caseId: '01', title: '拾光照相馆',
       seats: ['p0'], humanSeat: 'p0',
-    }, exec)
+    }, context)
+    return context
   }
 
   it('四个工具都注册上了', () => {
@@ -127,9 +141,12 @@ describe('工具的返回与它声明的输出', () => {
   })
 
   it('jubensha_player 的返回里没有 schema 没声明的键', async () => {
-    await startGame()
+    // **必须用 startGame 还回来的那个上下文**：局面按会话存，而 startGame 每次用一个新会话 id
+    // （「一个会话只能开一局」那道闸）。用共享的 exec 去调，等于问另一个会话——那里没有局面，
+    // 返回里就没有 humanSeat，于是这一条会变成一个跑不到东西的空断言。
+    const game = await startGame()
     const tool = tools.find(one => one.name === 'jubensha_player')
-    const value = await tool?.execute({ action: 'list' }, exec) as Record<string, unknown>
+    const value = await tool?.execute({ action: 'list' }, game) as Record<string, unknown>
     // 开局之后这两个键必须真的在——否则这一条就成了「跑了个空断言」。
     expect(Object.keys(value)).toContain('humanSeat')
     expectDeclared('jubensha_player', tool, value)
@@ -257,6 +274,43 @@ describe('搜证那一页不能空着过去', () => {
   })
 })
 
+describe('一个会话只能开一局', () => {
+  const tools = registeredTools()
+
+  it('重复 start 会被拦下来，并说清为什么', async () => {
+    // 实测（2026-10-07）：同一个会话里 `start` 被调了三次（07 → 01 → 07），而每一次都重置局面——
+    // 已经 spawn 的玩家还在 Team 名册里（不可移除），而座位表被清空了，于是下一次 spawn 撞
+    // 「座位上已经有人了」，而房间里看起来像什么也没发生过。那一次是我自己造的（同一会话里点了
+    // 两次「开一局」），而**闸不该依赖调用者自觉**。
+    const context = {
+      agent: { session: { header: { id: 'spec-session-once' }, snapshotEvents: () => [] } },
+    }
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1'], humanSeat: 'p0',
+    }, context)
+    /** 再开一次。 */
+    const again = await (async (): Promise<string> => {
+      try {
+        await state?.execute({
+          action: 'start', caseId: '07', title: '夜场',
+          seats: ['p0', 'p1'], humanSeat: 'p0',
+        }, context)
+        return ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    })()
+    expect(again).toContain('已经有一局了')
+    // 报错要说清出路：换会话，而不是「再试一次」。
+    expect(again).toContain('换会话')
+    // 而**局面没被换掉**——那正是这条闸要保的东西。
+    const shown = await state?.execute({ action: 'show' }, context) as { title?: string }
+    expect(shown.title).toBe('拾光照相馆')
+  })
+})
+
 describe('桌上说话不用主持人转达', () => {
   const tools = registeredTools()
 
@@ -351,18 +405,20 @@ describe('节奏闸：AI 不能自己一直玩下去', () => {
   }
 
   it('连着推进三次而真人没插进来，第四次会被拦住', async () => {
+    // 用自己的会话（「一个会话只能开一局」那道闸：共享 exec 可能已被别的测试开过局）。
+    const mine = { agent: { session: { header: { id: 'spec-session-pace' }, snapshotEvents: () => [] } } }
     const state = tools.find(one => one.name === 'jubensha_state')
     await state?.execute({
       action: 'start', caseId: '01', title: '拾光照相馆',
       seats: ['p0'], humanSeat: 'p0',
-    }, exec)
+    }, mine)
     // 前三次：闸放行——它们随后会撞在「桌上还没有 AI 玩家」上（这条测试只关心闸的计数，
     // 而 spawn 要 Team 服务，这里给的是 undefined）。
     for (let index = 0; index < 3; index += 1) {
-      expect(await sayOnce(exec)).toContain('桌上还没有 AI 玩家')
+      expect(await sayOnce(mine)).toContain('桌上还没有 AI 玩家')
     }
     // 第四次：闸该拦下来，而它说的是「把话头交给他」——那是这个闸存在的全部理由。
-    expect(await sayOnce(exec)).toContain('先停一下')
+    expect(await sayOnce(mine)).toContain('先停一下')
   })
 
   it('真人一开口，计数就从头开始', async () => {

@@ -27,6 +27,8 @@ import { openActorPool } from './actor.ts'
 import type { Actor, ActorPool } from './actor.ts'
 import { DM_HANDBOOK } from './dm-handbook.ts'
 import { CASE_HANDBOOK } from './case-handbook.ts'
+import { createBroadcaster } from './broadcast.ts'
+import type { Broadcaster } from './broadcast.ts'
 import { loadCase, bookPreview, bookRef, bookRefSeat, openBeforeReveal, pickBookRef, roleBook, sceneTruth, sceneVictim, tableClues } from './case.ts'
 import { createRegistry, playerBrief, PLAYER_TOOLS, SPEAK_TOOL } from './player.ts'
 import type { PlayerHandle } from './player.ts'
@@ -683,20 +685,25 @@ function isPreparing(sessionId: string): boolean {
  * 注册局面工具；监听器与注册项随 `ctx` 生命周期销毁。
  * @param ctx - 插件上下文。
  */
+/** 桌上的广播器——整个插件一份，它自己的定时器挂在 `ctx.effect` 里。 */
+let broadcaster: Broadcaster | undefined
+
 export function apply(ctx: Context): void {
   // 留痕：本插件没有任何界面元素，装没装、注册了什么，只能从这里读——否则「加载成功」
   // 与「静默跳过」在外部看起来一模一样（peer 不满足时内核就是静默跳过的，界面不报错）。
   // 与 dsh-allostasis 同一条判据，它的 README「诊断」段记了来由。
   console.info(`[${name}] loaded · registers ${STATE_TOOL}, ${PLAYER_TOOL}, ${CASE_TOOL}, ${ACTOR_TOOL}`)
+  // **桌上开播。** 一局开始之后（`jubensha_state action="start"`），真人与 AI 玩家说的每一句话
+  // 都由它原样广播给其余人——不再经主持人手打转达。见 `broadcast.ts` 与设计文档 §3。
+  //
+  // 它在 apply 里就造好（而不是开局时才造）：定时器是插件生命周期的一部分，而开局有很多次。
+  broadcaster ??= createBroadcaster(ctx)
   // **DM 行为手册**，注册成一条运行时 skill。
   //
   // **为什么是 skill 而不是塞进开局指令**（`instruction.ts` 里那七条是浓缩版）：开局指令每局
   // 只读一次，而带局是**一边走一边要查**的——盘问到一半、「我刚才是不是替他说话了」、
   // 「这条行踪该不该记」。而且塞进指令就只能留结论，这份手册里每一条都带着**它是哪一局踩出来的**，
   // 那才是它有用的地方：一条没有来由的规矩，遇到边界情况时不知道该怎么让。
-  //
-  // `ctx.get('skills')` 而不是 `ctx.skills`：那是可选服务，而包规矩里写着可选服务用 `ctx.get`
-  // ——属性代理对拓扑敏感，`get` 读的是全局服务表。
   const skills = ctx.get('skills')
   if (skills !== undefined) {
     ctx.effect(() => skills.register({
@@ -903,6 +910,23 @@ export function apply(ctx: Context): void {
           games.set(sessionId, createGame({ caseId, title, seats, humanSeat }))
           // 开局了，「正在准备」这个提示就撤掉——它是给「局面还没出来」那一段用的。
           preparing.delete(sessionId)
+          // **桌上开播。** 从此以后真人与 AI 玩家说的每一句话，都由宿主原样广播给其余人——
+          // 不再经主持人手打转达（见 `broadcast.ts` 与设计文档 §3）。
+          broadcaster?.watch(sessionId, async (line) => {
+            const current = games.get(sessionId)
+            if (current === undefined) return
+            const agents = ctx.get('agents')
+            const lead = agents?.get(SessionId(sessionId)) as Agent | undefined
+            if (lead === undefined) return
+            // 说话的那位不用收自己那句。
+            const listeners = players.list().filter(one => one.seat !== line.seat)
+            if (listeners.length === 0) return
+            // 署名要准：AI 玩家用角色名，真人用他那个座位的名字（座位号只有桌上的人看得懂）。
+            const speaker = line.seat === ''
+              ? (current.humanSeat === undefined ? '真人' : `真人 ${current.humanSeat}`)
+              : (players.list().find(one => one.seat === line.seat)?.name ?? line.seat)
+            await deliver(ctx, lead, listeners, `（${speaker}）${line.text}`, new AbortController().signal)
+          })
           // 留痕。「工具把局面记到哪个会话下」与「标签查的是哪个会话」是两件事，它们对不上时
           // 症状是标签永远说「还没开局」——而那个症状从外面看与"没开局"一模一样。
           // 这一行与下面端点那一行是唯一能把两者对上号的地方（同 `loaded · registers` 的理由）。
@@ -1346,7 +1370,7 @@ export function apply(ctx: Context): void {
       action: {
         type: 'string',
         enum: ['list', 'spawn', 'say', 'relay', 'unseat'],
-        description: 'list = 看桌上都有谁（默认）——**返回里含 humanSeat（真人坐在哪个位子）与 notSeated（还没叫上桌的 AI 位）**；spawn = 让一位 AI 玩家上桌；say = 把一句话说给某位玩家或全桌；relay = 把某位玩家刚说的话转达给桌上其余人；unseat = 从座位上撤掉这位玩家。',
+        description: 'list = 看桌上都有谁（默认）——**返回里含 humanSeat（真人坐在哪个位子）与 notSeated（还没叫上桌的 AI 位）**；spawn = 让一位 AI 玩家上桌；say = 把一句话说给某位玩家或全桌（那是**主持人的嘴**：转场、提问、宣布）；relay = 把某位玩家刚说的话转达给桌上其余人（**现在不用调它了**——桌上每一句话都由程序自动广播给所有人，见下）；unseat = 从座位上撤掉这位玩家。',
       },
       seat: { type: 'string', description: 'spawn / say / relay / unseat 用：座位 id，要与局面里的 seats 用同一套命名。say 也可以用 "*" 表示说给全桌听。' },
       name: { type: 'string', description: 'spawn 用：角色名。' },

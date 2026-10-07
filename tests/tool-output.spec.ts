@@ -166,6 +166,47 @@ describe('工具的返回与它声明的输出', () => {
   })
 })
 
+describe('自述完了就得有账', () => {
+  const tools = registeredTools()
+
+  it('还有人的行踪没记进时间线时，不许从自述推进', async () => {
+    // 用户 2026-10-07 报的：「时间线检测还是有点问题，这个数据是从哪来的？」——答案是那一栏读
+    // `timeline`（DM 主动记的），而 DM 听清了每个人的行踪却一条都没记，于是它一直写着
+    // 「其余时段还没有人交代」。而「听到行踪就顺手记一笔」在指令里只是一句叮嘱。
+    const context = {
+      agent: { session: { header: { id: 'spec-session-timeline' }, snapshotEvents: () => [] } },
+    }
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1', 'p2'], humanSeat: 'p0',
+    }, context)
+    /** 推一次阶段。 */
+    const push = async (): Promise<string> => {
+      try {
+        await state?.execute({ action: 'advance' }, context)
+        return ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    // 两条都没有——报错要把**缺谁**说清（而不是只说「空的」）。
+    expect(await push()).toContain('p0、p1、p2')
+    // 记上一条：还缺两个。
+    await state?.execute({ action: 'timeline', entries: [{ at: '20:00', seat: 'p0', doing: '到店' }] }, context)
+    expect(await push()).toContain('p1、p2')
+    // 记齐了才放行。
+    await state?.execute({
+      action: 'timeline',
+      entries: [
+        { at: '20:00', seat: 'p1', doing: '跟老周下了两盘棋' },
+        { at: '21:00', seat: 'p2', doing: '八点多来了一趟' },
+      ],
+    }, context)
+    expect(await push()).toBe('')
+  })
+})
+
 describe('搜证那一页不能空着过去', () => {
   const tools = registeredTools()
 
@@ -190,8 +231,17 @@ describe('搜证那一页不能空着过去', () => {
         return error instanceof Error ? error.message : String(error)
       }
     }
-    // 自述 → 问话 → 搜证：这两步不该被拦。
+    // 自述 → 问话：这一步要先有行踪（另一道闸管那个），所以先记一条。
+    //
+    // **这就是新加的那道闸在教 DM 的动作**：自述阶段每个人说完自己那段之后，DM 该把行踪
+    // 记进时间线——不然房间页左栏那一栏一直是空的（用户 2026-10-07 报的）。
+    expect(await push()).toContain('昨晚行踪还没记进时间线')
+    await state?.execute({
+      action: 'timeline',
+      entries: [{ at: '21:20', seat: 'p0', doing: '到店，叔叔不在柜台，等了十几分钟' }],
+    }, context)
     expect(await push()).toBe('')
+    // 问话 → 搜证：也该过。
     expect(await push()).toBe('')
     // 搜证 → 发言投票：一件线索都没有，该拦。
     expect(await push()).toContain('一件线索都还没发')

@@ -918,8 +918,29 @@ export function apply(ctx: Context): void {
           // 实测里 DM 会一路推到投票，一件线索都没摆出来（2026-10-06 我在 dev 里从头玩了一局
           // 才发现的：阶段条上「问话」「搜证」都点着，而桌上一条线索都没有）。
           //
-          // 闸放在这里，因为它就是「要不要进下一阶段」那一次调用——**在做出决定的那一步执行**。
+          // **自述完了就得有账。**
+          //
+          // 房间页左栏那一栏读的是 `timeline`（DM 主动记的），而「听到行踪就顺手记一笔」在指令里
+          // 只是一句叮嘱——实测里 DM 听清了每个人的行踪（「我八点前来的」「八点十五到的店」），
+          // 却一条都没记，于是那一栏从开局到投票一直写着「其余时段还没有人交代」
+          // （用户 2026-10-07 报的：「时间线检测还是有点问题，这个数据是从哪来的？」）。
+          //
+          // 判据是「**每个座位**都有一条」而不是「非空」——只判非空的话，记一条就能糊过去，
+          // 而那一栏的用处恰恰是横向对照（谁在回避自己那段时间）。
           const next = PHASE_ORDER[PHASE_ORDER.indexOf(before.phase) + 1]
+          if (before.phase === 'self-intro' && next === 'inquiry') {
+            const missing = before.seats.filter(seat => !before.timeline.some(one => one.seat === seat))
+            if (missing.length > 0) {
+              throw new Error(
+                `先别推：${missing.join('、')} 的昨晚行踪还没记进时间线（房间页左栏那一栏读的就是它）。\n`
+                + '他们自述里都说了自己在哪儿——用 `jubensha_state action="timeline"` 一条条记上，'
+                + '比如 `{at:"20:00", seat:"p1", doing:"跟老周下了两盘棋，坐了会儿就走了"}`。\n'
+                + '**`at` 要对着原话写**：「八点前」是 `20:00` 上下、「八点十五」是 `20:15`——'
+                + '**别按案情应该发生在几点去推**（实测的错法：某人说「八点多来了一趟」，'
+                + '而 `at` 填了 `21:00`）。记完再推阶段。',
+              )
+            }
+          }
           if (before.phase === 'search' && next === 'final' && before.revealedClues.length === 0) {
             throw new Error(
               '先别推：这一局一件线索都还没发（搜证那一页现在是空的，玩家什么都看不见）。\n'

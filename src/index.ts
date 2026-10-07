@@ -353,6 +353,36 @@ async function deliver(
 }
 
 /**
+ * 那个位子上有没有人——**同时看 Team 名册与插件自己的登记**。
+ *
+ * 两个来源各有一半事实：`players` 知道「谁吃过角色本」（那是插件创建时记的，而它**活在内存里**），
+ * 而 Team 名册知道「这个进程里谁被创建过」（那是**持久**的，重启之后还在）。
+ *
+ * **只查一个会得到自相矛盾的画面**（2026-10-08 实测）：重启之后名册里的人还在桌上说话，而
+ * `players` 空了——房间页于是把正在发言的人写成「还没上桌」。反过来只查名册也不行：一局散场
+ * 之后名册里那些名字还在（它不可移除），那时该报「还没上桌」的是新一局要请的人。
+ * 所以**取并集**：任一边说有人，就是有人。
+ * @param ctx - 插件上下文，用来取名册服务。
+ * @param sessionId - 会话 id（局面按会话存）。
+ * @param seat - 座位 id。
+ * @returns 那个位子上有人为 `true`。
+ */
+function seatedInRoster(ctx: Context, sessionId: string, seat: string): boolean {
+  const teams = ctx.get('agentTeams')
+  const agents = ctx.get('agents')
+  if (teams === undefined || agents === undefined) return false
+  const lead = agents.get(SessionId(sessionId))
+  if (lead === undefined) return false
+  try {
+    return teams.listMembers(lead).some(member => member.role === 'teammate'
+      && (member.name.split('-')[0] ?? '') === seat)
+  } catch {
+    // 名册读不到就当没有——那总比把一个正在说话的人报成「还没上桌」轻。
+    return false
+  }
+}
+
+/**
  * 把一位玩家收窄到「只能说话」—— 两层，各管一段。
  *
  * **第一层 `restrict`** 管的是可见性：不在白名单里的工具对玩家**根本不存在**，模型不会去试。
@@ -1677,7 +1707,14 @@ export function apply(ctx: Context): void {
           //
           // 这是同一个 gap 的第五次（前四次：DM 自己把局跑完、头像成灰块、自述页写「还没上桌」、
           // 问话页「还没出过声」）。前四次我都在**读者**那里补一句；这一次修在**数据**上。
+          //
+          // **第六次（2026-10-08，截 README 的图时看见的）**：`players` 是**内存**登记，而 Team
+          // 名册是**持久**的——重启之后名册里的人还在桌上说话，而 `players` 空了，于是
+          // `notSeated` 把他们全报成「还没上桌」。房间页那三行「沈曼卿 还没上桌」与中栏里
+          // 沈曼卿正在说话的那两屏并排放着，自相矛盾。**判据得同时看名册**——那才是「这个位子
+          // 上有没有人」的事实来源。
           notSeated: game.seats.filter(seat => seat !== game.humanSeat
+            && !seatedInRoster(ctx, session, seat)
             && !players.list().some(one => one.seat === seat)),
         }),        ...delivered !== undefined ? { delivered } : {},
       }

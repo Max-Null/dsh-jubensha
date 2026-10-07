@@ -102,9 +102,16 @@ function AutoScroll({ watch, style, children }: {
   children: React.ReactNode
 }) {
   const node = useRef<HTMLDivElement | null>(null)
+  /** 头一次渲染要无条件滚到底——那时 `scrollTop` 是 0，而「已在底部」这个判据当然不成立。 */
+  const first = useRef(true)
   useLayoutEffect(() => {
     const box = node.current
     if (box === null) return
+    if (first.current) {
+      first.current = false
+      box.scrollTop = box.scrollHeight
+      return
+    }
     const away = box.scrollHeight - box.scrollTop - box.clientHeight
     if (away > 60) return
     box.scrollTop = box.scrollHeight

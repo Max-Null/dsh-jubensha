@@ -579,6 +579,31 @@ function humanLines(agent: Agent): number {
 }
 
 /**
+ * 这一局里 AI 玩家在桌上说了多少条。
+ *
+ * **它才是节奏闸该看的数。** 原先那道闸数的是「主持人调了几次 `say`/`relay`」——而 2026-10-07
+ * 用户报的那一局里，主持人从头到尾**只开口 3 次**（它在忙别的），于是闸一次都没触发：
+ * 真人说了 2 次、玩家说了 **647 次**。
+ *
+ * 判据是会话事件（玩家的话经 Team 进来时是 `team-message`），不是我们的登记表。
+ * @param agent - 主持人的 agent。
+ * @returns 桌上玩家的发言条数。
+ */
+function playerLines(agent: Agent): number {
+  let count = 0
+  for (const event of agent.session.snapshotEvents()) {
+    if (event.type !== 'agent/inbox/spliced') continue
+    const inserted: unknown = event.data.inserted
+    if (!Array.isArray(inserted)) continue
+    for (const one of inserted) {
+      if (typeof one !== 'object' || one === null) continue
+      if ((one as { source?: { kind?: unknown } }).source?.kind === 'team-message') count += 1
+    }
+  }
+  return count
+}
+
+/**
  * 每个会话：上一次闸放行时真人的话数，以及从那以后 AI 侧说了几次。
  *
  * 它是「AI 自己玩得开心、真人插不进」那个问题的**结构修**：那件事我改过两轮开局指令都没管住
@@ -592,6 +617,60 @@ const sayStreak = new Map<string, { human: number, count: number }>()
 
 /** 连着几次 AI 主动发言而真人没插进来，就该拦一次。 */
 const SAY_STREAK_LIMIT = 3
+
+/**
+ * AI 玩家连着说了多少条而真人一句没说——**这才是那道闸该看的数**。
+ *
+ * 数「桌上玩家发言」而不是「主持人开口次数」：主持人可以不说话（它有一堆别的活），而桌子照样
+ * 一直转下去。2026-10-07 用户报的那一局就是那样——主持人只开口 3 次，而玩家说了 647 次，
+ * 真人 2 次；旧闸数的是开口次数，所以一次都没触发。
+ *
+ * 12 大约是两三轮的桌面往来：再紧会把热闹的正常回合也拦下来，再松就回到「等他反应过来已经
+ * 过去一百条」。
+ */
+const TABLE_STREAK_LIMIT = 12
+
+/** 每个会话：上一次真人说话时，真人说了几条、桌上玩家说了几条。 */
+const humanTurnMark = new Map<string, { human: number, players: number }>()
+
+/**
+ * 桌上是不是已经转了很久而真人没说话。
+ *
+ * **它与 `checkPace` 的区别在触发点**：那个挂在主持人的嘴上（它开口时才发现），
+ * 而这个挂在**每一个插件工具的调用**上——主持人正在记时间线、查本子、推阶段，都算它还在
+ * 带这一局，而这些时刻恰恰是它该想起来「桌上还有一个人」的时候。
+ *
+ * 2026-10-07 那一局就是它要防的：真人 2 次、玩家 647 次，而主持人只开口 3 次——
+ * 旧的节奏闸数的是主持人的开口次数，所以一次都没触发。
+ * @param session - 会话 id。
+ * @param dm - 主持人的 agent。
+ * @returns 该提醒就返回那句提醒；不需要就返回 `undefined`。
+ */
+function tableRunning(session: string, dm: Agent): string | undefined {
+  const human = humanLines(dm)
+  const players = playerLines(dm)
+  const mark = humanTurnMark.get(session)
+  // 第一次见到这个会话：记基准，不拦。
+  if (mark === undefined) {
+    humanTurnMark.set(session, { human, players })
+    return undefined
+  }
+  // 真人说了新的——基准跟着走，桌面重新计时。
+  if (human > mark.human) {
+    humanTurnMark.set(session, { human, players })
+    return undefined
+  }
+  const since = players - mark.players
+  if (since < TABLE_STREAK_LIMIT) return undefined
+  // 拦一次，然后把基准推到现在——否则它会一直拦，那等于把主持人卡死（而不是提醒它）。
+  humanTurnMark.set(session, { human, players })
+  return `先停一下：桌上已经连着说了 ${String(since)} 条，而真人一句没说。\n`
+    + '**现在不是他不在，是他插不进来。** 请做两件事，然后停：\n'
+    + '1. 用 `jubensha_player action="say"` 对全桌说一句，**把话头点给他**——'
+    + '点名字 + 问一个具体的（「陈曼，你昨晚几点到的、坐在哪一排」好过「你想说点什么」）；\n'
+    + '2. **然后把这一轮结束掉**：不再调任何工具、也不转达下一位，让他的回答成为桌上的下一条。\n'
+    + '他接上之后，节奏就归你了。'
+}
 
 /**
  * 节奏闸——AI 侧每说一句话都过一遍它。
@@ -732,6 +811,25 @@ export function apply(ctx: Context): void {
       content: CASE_HANDBOOK,
     }), 'jubensha: case handbook skill')
   }
+  // **桌上转太久了，就该有人把话头交给真人。**
+  //
+  // 挂在主持人这一侧的每一个插件工具调用上，而不是只挂在它的嘴上（`say` / `relay` 那两处）。
+  // 理由是 2026-10-07 用户报的那一局：真人说了 2 次、玩家说了 **647 次**，而主持人只开口 3 次
+  // ——它一直在忙别的（记时间线、查本子、推阶段），而旧的节奏闸数的是**它的开口次数**，
+  // 所以整局一次都没触发。**闸要挂在它必然经过的地方，而不是它偶尔开口的地方。**
+  //
+  // 玩家那边不过这道闸：他们的每次发言都经 Team 进来，由 `confine` 收窄，没有可拦的动作。
+  ctx.on('tools/pre-execute', (exec, next) => {
+    if (!exec.name.startsWith('jubensha_')) return next()
+    const agent = exec.agent
+    if (agent === undefined) return next()
+    const session = String(agent.session.header.id)
+    if (!games.has(session)) return next()
+    if (players.find(session) !== undefined) return next()
+    const note = tableRunning(session, agent)
+    if (note !== undefined) return Promise.resolve({ kind: 'deny', reason: note })
+    return next()
+  })
   // 房间标签读的那一份快照。**只读**——开一局、推进阶段、发线索都在对话里说，
   // 它不发号施令（设计方案里「界面是附加层」那条约束）。
   mountRoomApi(ctx, async (sessionId: string): Promise<RoomSnapshot> => {

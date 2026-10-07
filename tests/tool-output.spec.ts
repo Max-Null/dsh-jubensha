@@ -30,11 +30,21 @@ interface RegisteredTool {
  * 覆盖范围里（`jubensha_state` 与 `jubensha_player` 不碰存储，局面与玩家登记都是模块级的）。
  * @returns 注册顺序里的工具定义。
  */
+/** 那一次 `apply` 里注册过的 `tools/pre-execute` 钩子（测试要手动触发它们）。 */
+const preExecuteHooks: ((exec: { name: string, agent?: unknown }, next: () => Promise<unknown>) => Promise<unknown>)[] = []
+
 function registeredTools(): RegisteredTool[] {
   const collected: RegisteredTool[] = []
   const ctx = {
     effect: () => () => {},
-    on: () => () => {},
+    // **钩子不能吞掉。** 假 ctx 原先这里是 `() => () => {}`，于是插件注册的
+    // `tools/pre-execute`（桌上转太久了要提醒主管人那道闸挂在那儿）在测试里从来没跑过——
+    // 而它在生产里是有效的（同一个钩子拦住过玩家的 `list_agents`）。
+    // 记下来，让测试自己 fire。
+    on: (name: string, callback: (exec: { name: string, agent?: unknown }, next: () => Promise<unknown>) => Promise<unknown>) => {
+      if (name === 'tools/pre-execute') preExecuteHooks.push(callback)
+      return () => {}
+    },
     get: () => undefined,
     tools: {
       register: (definition: RegisteredTool) => {
@@ -45,8 +55,27 @@ function registeredTools(): RegisteredTool[] {
     webServer: { register: () => () => {} },
     webRuntime: { trustedHosts: [] },
   }
+  preExecuteHooks.length = 0
   apply(ctx as unknown as Context)
   return collected
+}
+
+/**
+ * 走一遍真实执行路径上的那道闸（内核在工具解析之后、执行之前会跑它）。
+ *
+ * 假 ctx 不会自己 dispatch，所以测试显式调一次——**不这么做就等于测了个没有闸的世界**。
+ * @param name - 工具名。
+ * @param agent - 执行者。
+ * @returns 拦下来的理由；放行时给空串。
+ */
+async function preExecute(name: string, agent: unknown): Promise<string> {
+  for (const hook of preExecuteHooks) {
+    const verdict = await hook({ name, agent }, () => Promise.resolve())
+    if (verdict !== undefined && verdict !== null && typeof verdict === 'object' && 'kind' in verdict) {
+      return String((verdict as { reason?: unknown }).reason ?? '')
+    }
+  }
+  return ''
 }
 
 /**
@@ -271,6 +300,87 @@ describe('搜证那一页不能空着过去', () => {
     const state2 = tools.find(one => one.name === 'jubensha_state')
     await state2?.execute({ action: 'reveal', clues: ['c1'] }, context)
     expect(await push()).toBe('')
+  })
+})
+
+describe('桌上转太久了，该把话头交给真人', () => {
+  const tools = registeredTools()
+
+  /** 造一个主持人上下文：玩家发言条数**每次读都在长**（桌上是活的），真人说 `human` 条。 */
+  function dmContext(id: string, count: number, human: number): { context: Record<string, unknown>, grow: (to: number) => void } {
+    // **起手就是 `count` 条**（这参数第一版忘了用，于是「11 条」那张桌子其实是空的）。
+    let players = count
+    const events: unknown[] = []
+    let seq = 0
+    /** 按当前数补齐事件。 */
+    const rebuild = (): void => {
+      events.length = 0
+      seq = 0
+      for (let index = 0; index < players; index += 1) {
+        seq += 1
+        events.push({
+          type: 'agent/inbox/spliced',
+          seq,
+          data: { inserted: [{ content: [{ type: 'text', text: `Team message m-${String(index)} from p3-x: 第 ${String(index)} 句` }], source: { kind: 'team-message' } }] },
+        })
+      }
+      for (let index = 0; index < human; index += 1) {
+        seq += 1
+        events.push({
+          type: 'agent/inbox/spliced',
+          seq,
+          data: { inserted: [{ content: [{ type: 'text', text: `真人第 ${String(index)} 句` }], source: { kind: 'user' } }] },
+        })
+      }
+    }
+    rebuild()
+    return {
+      context: { agent: { session: { header: { id }, snapshotEvents: () => events } } },
+      grow(to: number) { players = to; rebuild() },
+    }
+  }
+
+  it('玩家连着说十几条而真人没说话，主持人的下一个动作会被拦下来', async () => {
+    // 用户 2026-10-07 报的：「演员们玩的挺嗨啊，又把我无视了，DM不干预吗？」
+    // 那一局：真人 2 次 / 玩家 **647 次** / DM 只开口 3 次——而旧的节奏闸数的是 DM 的开口次数，
+    // 所以整局一次都没触发。这道闸数的是**桌上玩家说了多少条**。
+    const { context, grow } = dmContext('spec-session-table-pace', 0, 0)
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({ action: 'start', caseId: '01', title: '拾光照相馆', seats: ['p0', 'p1'], humanSeat: 'p0' }, context)
+    /** 调一次：先过那道闸（内核在真实路径上就是这么做的），再执行。 */
+    const poke = async (): Promise<string> => {
+      const denied = await preExecute('jubensha_state', context.agent)
+      if (denied !== '') return denied
+      try {
+        const result = await state?.execute({ action: 'show' }, context) as unknown
+        return result === undefined ? '（没返回）' : ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    // **顺序要紧**：第一次过闸只是记基准（那一刻桌上有多少条就是起点）。
+    // 所以先空跑一次，再让桌上涨起来——那才是真实形状：开局定基准，而后桌上一直转、真人没说。
+    await poke()
+    grow(20)
+    const blocked = await poke()
+    expect(blocked).toContain('先停一下')
+    // 提醒里要有出路：点名字 + 问具体的 + 然后停下。
+    expect(blocked).toContain('把话头点给他')
+    expect(blocked).toContain('把这一轮结束掉')
+    // 而它**只拦一次**——再拦下去等于把主持人卡死（而不是提醒它）。
+    expect(await poke()).toBe('')
+  })
+
+  it('真人说过话之后，桌上重新计时', async () => {
+    // 真人说完之后基准跟着走——所以接下来这十几条不该立刻又被拦。
+    const { context, grow } = dmContext('spec-session-table-pace-human', 11, 1)
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({ action: 'start', caseId: '01', title: '拾光照相馆', seats: ['p0', 'p1'], humanSeat: 'p0' }, context)
+    // 基线：真人刚说完那一次过闸 → 记下「此刻桌上有 11 条」。
+    expect(await preExecute('jubensha_state', context.agent)).toBe('')
+    grow(14)
+    // 又转了几条——还没到阈值，不拦。
+    expect(await preExecute('jubensha_state', context.agent)).toBe('')
   })
 })
 

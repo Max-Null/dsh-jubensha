@@ -84,6 +84,38 @@ function seatOf(line: SaidLine, humanSeat: string | undefined): string {
 
 type Locale = PropsLocale<'jubensha'>
 
+/**
+ * 会自己跟着最新一条滚的容器。
+ *
+ * **只在用户已经在底部时才滚。** 那是聊天界面的老规矩：他正往上翻的时候，新消息不该把他拽回
+ * 底部——那比不滚更烦人。判据是「离底部还有多远」，留几十像素的宽容度（滚动位置常常差一两个像素）。
+ *
+ * **为什么需要它**（用户 2026-10-07 报的）：中栏那个容器原先只是个 `overflowY: auto` 的 div，
+ * 新消息进来时滚动位置不动——于是看到的一直是旧的，最新那句在下面看不见。
+ * @param props - `watch` 是「新消息来了没有」的判据（给 `said` 数组本身：长度不变而内容变的
+ *   情况也要滚，比如同一批被重新投影）；`style` 与 `children` 原样转给那个 div。
+ * @returns 那个 div。
+ */
+function AutoScroll({ watch, style, children }: {
+  watch: unknown
+  style: React.CSSProperties
+  children: React.ReactNode
+}) {
+  const node = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const box = node.current
+    if (box === null) return
+    const away = box.scrollHeight - box.scrollTop - box.clientHeight
+    if (away > 60) return
+    box.scrollTop = box.scrollHeight
+  }, [watch])
+  return (
+    <div ref={node} style={style}>
+      {children}
+    </div>
+  )
+}
+
 /** 五个阶段，按顺序。 */
 const PHASES = ['self-intro', 'inquiry', 'search', 'final', 'reveal'] as const
 type Phase = typeof PHASES[number]
@@ -1256,7 +1288,7 @@ export function RoomView({
       }}>
         <LeftColumn snapshot={snapshot} t={t} />
       </div>
-      <div style={{ minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
+      <AutoScroll watch={said} style={{ minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
         <SaidColumn
           t={t}
           said={said}
@@ -1264,7 +1296,7 @@ export function RoomView({
           seatNames={seatNames}
           humanSeat={snapshot.game?.humanSeat ?? ''}
         />
-      </div>
+      </AutoScroll>
       <div style={{
         minWidth: 0, minHeight: 0, overflowY: 'auto',
         borderLeft: '1px solid var(--dsw-border-subtle, rgba(127,127,127,0.28))',

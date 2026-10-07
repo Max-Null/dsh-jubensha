@@ -116,7 +116,7 @@ describe('工具的返回与它声明的输出', () => {
   async function startGame(): Promise<void> {
     await tools.find(one => one.name === 'jubensha_state')?.execute({
       action: 'start', caseId: '01', title: '拾光照相馆',
-      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+      seats: ['p0'], humanSeat: 'p0',
     }, exec)
   }
 
@@ -143,7 +143,14 @@ describe('工具的返回与它声明的输出', () => {
     //
     // 这是同一个 gap 的第五次（前四次：DM 自己把局跑完、头像成灰块、自述页「还没上桌」、
     // 问话页「还没出过声」）。前四次我都在读者那里补一句；这一次修在数据上。
-    await startGame()
+    //
+    // **这一条要用一张满座的桌**：它验的是「真人不在 notSeated 里，而 AI 那几个还在」——
+    // 只有真人的桌子看不出区别（两边都是空）。
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+    }, exec)
     const tool = tools.find(one => one.name === 'jubensha_player')
     const value = await tool?.execute({ action: 'list' }, exec) as { notSeated: string[] }
     expect(value.notSeated).not.toContain('p0')
@@ -172,7 +179,7 @@ describe('搜证那一页不能空着过去', () => {
     const state = tools.find(one => one.name === 'jubensha_state')
     await state?.execute({
       action: 'start', caseId: '01', title: '拾光照相馆',
-      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+      seats: ['p0'], humanSeat: 'p0',
     }, context)
     /** 推一次阶段。 */
     const push = async (): Promise<string> => {
@@ -200,6 +207,50 @@ describe('搜证那一页不能空着过去', () => {
   })
 })
 
+describe('人齐了才开场', () => {
+  const tools = registeredTools()
+
+  it('还有座位没上桌时，谁都不许开口', async () => {
+    // 这一条是用户 2026-10-07 报的：小满还没上桌，阿May 就开始问真人了。从那一局的调用序列
+    // 看得很清楚——`spawn p1` → p1 自述 → `spawn p2` → **p2 就开口了**，而 p3 还没 spawn。
+    // DM 把「一个个请他们上桌」理解成了「上一个说完就叫下一个，而叫完就让他说话」，
+    // 于是第三个人上桌的节奏被前两个人打断了。
+    const context = {
+      agent: { session: { header: { id: 'spec-session-seated' }, snapshotEvents: () => [] } },
+    }
+    const state = tools.find(one => one.name === 'jubensha_state')
+    await state?.execute({
+      action: 'start', caseId: '01', title: '拾光照相馆',
+      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+    }, context)
+    const player = tools.find(one => one.name === 'jubensha_player')
+    /** 试着说一句。 */
+    const speak = async (): Promise<string> => {
+      try {
+        await player?.execute({ action: 'say', seat: '*', message: '各位好' }, context)
+        return ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    // 三个 AI 位一个都没上桌——该拦，而报错要说清还缺谁。
+    const blocked = await speak()
+    expect(blocked).toContain('桌上还缺人')
+    expect(blocked).toContain('p1')
+    expect(blocked).toContain('p3')
+    // 而 `relay` 也过同一道闸（桌上缺人时转达，缺的那个人收不到）。
+    const relayed = await (async () => {
+      try {
+        await player?.execute({ action: 'relay', seat: 'p1' }, context)
+        return ''
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    })()
+    expect(relayed).toContain('桌上还缺人')
+  })
+})
+
 describe('节奏闸：AI 不能自己一直玩下去', () => {
   const tools = registeredTools()
   const say = { action: 'say', seat: '*', message: '先说一遍你昨晚的经历' }
@@ -224,7 +275,7 @@ describe('节奏闸：AI 不能自己一直玩下去', () => {
     const state = tools.find(one => one.name === 'jubensha_state')
     await state?.execute({
       action: 'start', caseId: '01', title: '拾光照相馆',
-      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+      seats: ['p0'], humanSeat: 'p0',
     }, exec)
     // 前三次：闸放行——它们随后会撞在「桌上还没有 AI 玩家」上（这条测试只关心闸的计数，
     // 而 spawn 要 Team 服务，这里给的是 undefined）。
@@ -240,7 +291,7 @@ describe('节奏闸：AI 不能自己一直玩下去', () => {
     const { context, speak } = execWhereHumanSpeaks('spec-session-with-human')
     await state?.execute({
       action: 'start', caseId: '01', title: '拾光照相馆',
-      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+      seats: ['p0'], humanSeat: 'p0',
     }, context)
     // 他没开口时连着推三次，第四次会被拦。
     for (let index = 0; index < 3; index += 1) await sayOnce(context)
@@ -259,7 +310,7 @@ describe('节奏闸：AI 不能自己一直玩下去', () => {
     }
     await state?.execute({
       action: 'start', caseId: '01', title: '拾光照相馆',
-      seats: ['p0', 'p1', 'p2', 'p3'], humanSeat: 'p0',
+      seats: ['p0'], humanSeat: 'p0',
     }, context)
     const tool = tools.find(one => one.name === 'jubensha_player')
     /** 跑一次 relay，返回它的报错文案。 */

@@ -602,8 +602,34 @@ const SAY_STREAK_LIMIT = 3
  * @param session - 会话 id（闸按会话记）。
  * @param dm - 主持人的 agent。
  */
-function checkPace(session: string, dm: Agent): void {
-  const human = humanLines(dm)
+/**
+ * 「人还没叫齐」那道闸——**开局不是一边叫人一边开场**。
+ *
+ * 实测（2026-10-07 用户报的）：DM 的调用序列是 `spawn p1` → p1 自述 → `spawn p2` →
+ * **p2 就开口问真人了**，而 p3 还没上桌。它把指令里那句「一个个请他们上桌」理解成了
+ * 「上一个说完就叫下一个，而叫完就让他说话」——于是第三个人上桌的节奏被前两个人打断了。
+ *
+ * 判据用 `players`（那是「谁已经吃过角色本」的唯一事实来源）。而 `say` 与 `relay` 都过它：
+ * 桌上缺人时说的话，缺的那个人收不到——**而他会从别人的嘴里听到自己被讨论过**。
+ * @param session - 会话 id，用来取这一局。
+ * @param dm - 主持人的 agent。
+ */
+function checkSeated(session: string): void {
+  const game = games.get(session)
+  if (game === undefined) return
+  const seated = new Set(players.list().map(one => one.seat))
+  const missing = game.seats.filter(seat => seat !== game.humanSeat && !seated.has(seat))
+  if (missing.length === 0) return
+  throw new Error(
+    `先别开口：桌上还缺人——${missing.join('、')} 还没拿到角色本。\n`
+    + '**人齐了才开场**：把剩下的座位用 jubensha_player action="spawn" 一个个叫上来'
+    + '（一座一份角色本，给它自己那一份）。\n'
+    + '现在叫人是安全的：先上桌的那几位不会自己开口抢话——他们等着你叫。'
+    + '全桌上桌之后，你再从真人开始请他们自述。',
+  )
+}
+
+function checkPace(session: string, dm: Agent): void {  const human = humanLines(dm)
   const streak = sayStreak.get(session)
   const count = streak !== undefined && streak.human === human ? streak.count + 1 : 1
   if (count > SAY_STREAK_LIMIT) {
@@ -1405,6 +1431,7 @@ export function apply(ctx: Context): void {
           if (seat === undefined || message === undefined) throw new Error('say 需要 seat 与 message 两项都给。')
           const dm = exec.agent
           if (dm === undefined) throw new Error(`${PLAYER_TOOL} 需要一个调用它的 agent。`)
+          checkSeated(session)
           checkPace(session, dm)
           // seat="*" 是说给全桌听：桌上每个人都该听见，一条命令发出去，程序保证一个都不漏。
           // 逐个手发正是"漏掉某个人"的来源，而漏掉的那个不会知道自己漏了什么。
@@ -1425,6 +1452,7 @@ export function apply(ctx: Context): void {
           //
           // 放在 `requirePlayer` 之前：那两句是「这一位还没开过口」之类的**前置检查**，而闸问的是
           // 「现在该不该说」——后者更靠前。
+          checkSeated(session)
           checkPace(session, dm)
           const speaker = requirePlayer(seat)
           const said = players.lastSaid(seat)

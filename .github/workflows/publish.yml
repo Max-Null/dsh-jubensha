@@ -30,9 +30,10 @@ jobs:
         with:
           version: 11
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          # Trusted Publishing 要求 npm >= 11.5.1，Node 24 起自带。
+          node-version: 24
           registry-url: https://registry.npmjs.org
           cache: pnpm
 
@@ -44,8 +45,7 @@ jobs:
       - run: pnpm test
 
       # prepublishOnly 会再 build 一次（npm publish 的既有行为），产物与测试都来自同一次运行。
+      # 凭据来自 OIDC（npm 侧的 Trusted Publisher 绑定本仓 + 本 workflow），不再用长期 token。
       - name: publish
         if: ${{ inputs.dry-run != true }}
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public

@@ -17,7 +17,9 @@ on:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    # 钉版本而不是 ubuntu-latest：2026-10-19 起 latest 迁到 Ubuntu 26，
+    # 发布链路不该被基础镜像的自动迁移带走。
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write

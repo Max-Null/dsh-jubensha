@@ -53,7 +53,7 @@ function registeredTools(): RegisteredTool[] {
       },
     },
     webServer: { register: () => () => {} },
-    webRuntime: { trustedHosts: [] },
+    webStartup: { trustedHosts: [] },
   }
   preExecuteHooks.length = 0
   apply(ctx as unknown as Context)

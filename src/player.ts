@@ -13,10 +13,10 @@
  *
  * @module @max-null/dsh-jubensha/player
  */
-import type { ContinuableStart } from '@deepseek-ai/dsh-subagent'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 
 /** 玩家背后的子会话 id，跨 activation 稳定。 */
-export type PlayerChildId = ContinuableStart['childId']
+export type PlayerChildId = SessionId
 
 /** 玩家唯一的对外通道：对主持人说话。 */
 export const SPEAK_TOOL = 'send_message'

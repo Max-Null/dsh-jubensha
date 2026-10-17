@@ -116,7 +116,7 @@ export type { RoomActor, RoomGame, RoomPlayer, RoomSnapshot } from './room-types
  *
  * 只认 GET：面板只读，写操作全在对话里。**必须带 `?session=<id>`**——局面是按会话存的，
  * 没有「全局局面」这回事了（见 `index.ts` 里 `games` 的注释）。
- * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
+ * @param ctx - 插件上下文（要已声明 `webServer` / `webStartup` 注入）。
  * @param snapshot - 按会话取快照；由调用方决定数据从哪来。
  */
 export function mountRoomApi(ctx: Context, snapshot: (sessionId: string) => Promise<RoomSnapshot>): void {
@@ -130,7 +130,7 @@ export function mountRoomApi(ctx: Context, snapshot: (sessionId: string) => Prom
         handler: (req: unknown, res: unknown) => Promise<void> | void
       }): () => void
     }
-    webRuntime: { trustedHosts: readonly string[] }
+    webStartup: { trustedHosts: readonly string[] }
   }
 
   ctx.effect(() => services.webServer.register({
@@ -138,7 +138,7 @@ export function mountRoomApi(ctx: Context, snapshot: (sessionId: string) => Prom
     path: '/jubensha/room',
     handler: async (req: unknown, res: unknown) => {
       const request = req as { headers: RequestHeaders, method?: string, url?: string }
-      if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
+      if (!isTrusted(request.headers, services.webStartup.trustedHosts)) {
         writeJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }
@@ -258,7 +258,7 @@ function need(body: Record<string, unknown>, field: string): string {
  *
  * **写端点只认自己那几个动作**，一个不多：设置页要的是"改这批字段"，而不是"随便调用池子"。
  * 围栏与只读端点同一套（loopback 或 trustedHosts、拒 cross-site、Origin 同源）。
- * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
+ * @param ctx - 插件上下文（要已声明 `webServer` / `webStartup` 注入）。
  * @param pool - 取演员池；由调用方决定什么时候开它。
  */
 export function mountActorApi(ctx: Context, pool: () => Promise<ActorWriter>): void {
@@ -270,7 +270,7 @@ export function mountActorApi(ctx: Context, pool: () => Promise<ActorWriter>): v
         handler: (req: unknown, res: unknown) => Promise<void> | void
       }): () => void
     }
-    webRuntime: { trustedHosts: readonly string[] }
+    webStartup: { trustedHosts: readonly string[] }
   }
 
   ctx.effect(() => services.webServer.register({
@@ -278,7 +278,7 @@ export function mountActorApi(ctx: Context, pool: () => Promise<ActorWriter>): v
     path: '/jubensha/actor',
     handler: async (req: unknown, res: unknown) => {
       const request = req as { headers: RequestHeaders, method?: string, url?: string }
-      if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
+      if (!isTrusted(request.headers, services.webStartup.trustedHosts)) {
         writeJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }
@@ -366,7 +366,7 @@ function maybeNumber(body: Record<string, unknown>, field: string): number | und
  * 便签是**要留下来的**——它得跟着会话活，切走再回来还在。
  *
  * 三个动作都带 `session`：便签按会话分，而 HTTP 请求本身没有会话上下文。
- * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
+ * @param ctx - 插件上下文（要已声明 `webServer` / `webStartup` 注入）。
  * @param pool - 取便签池；由调用方决定什么时候开它。
  */
 export function mountNoteApi(ctx: Context, pool: () => Promise<NoteWriter>): void {
@@ -378,7 +378,7 @@ export function mountNoteApi(ctx: Context, pool: () => Promise<NoteWriter>): voi
         handler: (req: unknown, res: unknown) => Promise<void> | void
       }): () => void
     }
-    webRuntime: { trustedHosts: readonly string[] }
+    webStartup: { trustedHosts: readonly string[] }
   }
 
   ctx.effect(() => services.webServer.register({
@@ -386,7 +386,7 @@ export function mountNoteApi(ctx: Context, pool: () => Promise<NoteWriter>): voi
     path: '/jubensha/note',
     handler: async (req: unknown, res: unknown) => {
       const request = req as { headers: RequestHeaders, method?: string, url?: string }
-      if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
+      if (!isTrusted(request.headers, services.webStartup.trustedHosts)) {
         writeJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }
@@ -468,7 +468,7 @@ export function caseDirAction(pathname: string): string | undefined {
  *
  * **为什么它没有 `?session=`**：这份配置是**这台机器上的这个人**的，与哪一局无关——与演员池
  * 一样，跟房间快照那条不同。
- * @param ctx - 插件上下文（要已声明 `webServer` / `webRuntime` 注入）。
+ * @param ctx - 插件上下文（要已声明 `webServer` / `webStartup` 注入）。
  * @param pool - 取配置；由调用方决定什么时候开它。
  */
 export function mountCaseDirApi(ctx: Context, pool: () => Promise<CaseDirWriter>): void {
@@ -480,7 +480,7 @@ export function mountCaseDirApi(ctx: Context, pool: () => Promise<CaseDirWriter>
         handler: (req: unknown, res: unknown) => Promise<void> | void
       }): () => void
     }
-    webRuntime: { trustedHosts: readonly string[] }
+    webStartup: { trustedHosts: readonly string[] }
   }
 
   ctx.effect(() => services.webServer.register({
@@ -488,7 +488,7 @@ export function mountCaseDirApi(ctx: Context, pool: () => Promise<CaseDirWriter>
     path: '/jubensha/case-dirs',
     handler: async (req: unknown, res: unknown) => {
       const request = req as { headers: RequestHeaders, method?: string, url?: string }
-      if (!isTrusted(request.headers, services.webRuntime.trustedHosts)) {
+      if (!isTrusted(request.headers, services.webStartup.trustedHosts)) {
         writeJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }

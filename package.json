@@ -1,6 +1,6 @@
 {
   "name": "@max-null/dsh-jubensha",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "剧本杀（jubensha）：一个人也能开局的推理本与情感本 —— AI 当 DM，AI 填满整张桌子",
   "license": "MIT",
   "publishConfig": {

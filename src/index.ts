@@ -55,10 +55,10 @@ export const name = 'dsh-jubensha'
  * inject`，连带着 `jubensha_player` 的 `spawn`（传了 `actor` 时）也一起挂——而**不传 actor
  * 的 spawn 一直正常**，所以这个错看起来像是"演员功能坏了"，实际是插件没有声明它依赖的服务。
  *
- * `webServer` / `webRuntime` 是房间端点用的：面板在浏览器里，与宿主不共享服务，
+ * `webServer` / `webStartup` 是房间端点用的：面板在浏览器里，与宿主不共享服务，
  * 只能走插件自己的 HTTP 端点（见 `room.ts`）。
  */
-export const inject = ['tools', 'storage', 'webServer', 'webRuntime']
+export const inject = ['tools', 'storage', 'webServer', 'webStartup']
 
 /**
  * 当前这一局。
